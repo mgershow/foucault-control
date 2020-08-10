@@ -22,23 +22,19 @@ const int cat5171Addr = 44;
 //const int readPin2 = A3; // ADC1
 //const int readPin3 = A2; // ADC0 or ADC1
 
-uint16_t thresh = 15650;
+uint16_t thresh = 35800;
 uint16_t hysteresis = 200;
 uint16_t lastValue;
 bool state;
 bool transition;
 bool firing;
-int timeToActivate = 150;
-int durToActivate = 5;
+int timeToActivate = 50;
+int durToActivate = 100;
 int retriggerDelay = 500;
 bool dirToActivate = false;
 
 unsigned long lastLow;
 unsigned long lastHigh;
-unsigned long lastRead;
-unsigned long deltaRead;
-uint16_t lowVal;
-uint16_t highVal;
 
 unsigned long maxTransitionInterval = 10000; //microseconds
 
@@ -55,7 +51,7 @@ void setup() {
     // reference can be ADC_REFERENCE::REF_3V3, ADC_REFERENCE::REF_1V2 (not for Teensy LC) or ADC_REFERENCE::REF_EXT.
     //adc->adc0->setReference(ADC_REFERENCE::REF_1V2); // change all 3.3 to 1.2 if you change the reference to 1V2
 
-    adc->adc0->setAveraging(32); // set number of averages
+    adc->adc0->setAveraging(16); // set number of averages
     adc->adc0->setResolution(16); // set bits of resolution
 
     // it can be any of the ADC_CONVERSION_SPEED enum: VERY_LOW_SPEED, LOW_SPEED, MED_SPEED, HIGH_SPEED_16BITS, HIGH_SPEED or VERY_HIGH_SPEED
@@ -64,7 +60,7 @@ void setup() {
     // where the numbers are the frequency of the ADC clock in MHz and are independent on the bus speed.
     adc->adc0->setConversionSpeed(ADC_CONVERSION_SPEED::LOW_SPEED); // change the conversion speed
     // it can be any of the ADC_MED_SPEED enum: VERY_LOW_SPEED, LOW_SPEED, MED_SPEED, HIGH_SPEED or VERY_HIGH_SPEED
-    adc->adc0->setSamplingSpeed(ADC_SAMPLING_SPEED::VERY_LOW_SPEED); // change the sampling speed
+    adc->adc0->setSamplingSpeed(ADC_SAMPLING_SPEED::MED_SPEED); // change the sampling speed
 
     // always call the compare functions after changing the resolution!
     //adc->adc0->enableCompare(1.0/3.3*adc->getMaxValue(), 0); // measurement will be ready if value < 1.0V
@@ -86,7 +82,7 @@ void setup() {
     Wire.begin();
     Wire.beginTransmission(cat5171Addr);
     Wire.write(byte(0x00));
-    Wire.write(10);
+    Wire.write(64);
     Wire.endTransmission();
 
     delay(500);
@@ -95,7 +91,7 @@ void setup() {
 int value = 0;
 int value2 = 0;
 char c=0;
-
+bool on = false;
 void loop() {
 
     if (Serial.available()) {
@@ -117,8 +113,6 @@ void loop() {
             Serial.print("Conversion successful? ADC1: ");
             Serial.println(adc->adc1->isComplete());
             #endif
-            Serial.print("Delta read = ");
-            Serial.println(deltaRead, DEC);
         } else if(c=='r') { // restart conversion
             Serial.println("Restarting conversions ");
             adc->adc0->startContinuous(readPin);
@@ -140,6 +134,10 @@ void loop() {
             // you can still call analogRead, it will pause the conversion, get the value and resume the continuous conversion automatically.
             Serial.print("Single read on readPin3: ");
             Serial.println(adc->adc0->analogRead(readPin)*3.3/adc->adc0->getMaxValue(), DEC);
+        } else if (c == 'o') {
+          on = !on;
+          digitalWriteFast(LED_BUILTIN,on);           
+          digitalWrite(actCoil, on);
         }
     }
 
@@ -152,18 +150,16 @@ void loop() {
       Serial.print("ADC1: "); Serial.println(getStringADCError(adc->adc1->fail_flag));
     }
     #endif
-    bool falling = true;
-    bool rising = false;
-    if (((micros() - lastHigh < maxTransitionInterval) && falling && (lastLow - lastHigh) < maxTransitionInterval) || (micros() - lastLow < maxTransitionInterval) && rising && (lastHigh - lastLow) < maxTransitionInterval) {
+
+    if (((micros() - lastHigh < maxTransitionInterval) && (lastLow - lastHigh) < maxTransitionInterval) || (micros() - lastLow < maxTransitionInterval) && (lastHigh - lastLow) < maxTransitionInterval) {
         transition = true;
       }
    
 
-    if (transition) {
-      double deltaT = lastLow > lastHigh ? lastLow-lastHigh : lastHigh - lastLow;
-      double deltaV = highVal - lowVal;
-      Serial.print("slope = ");
-      Serial.println(deltaV/deltaT, DEC);
+    if (false && transition) {
+      unsigned long delta = lastLow > lastHigh ? lastLow-lastHigh : lastHigh - lastLow;
+      Serial.print("Delta = ");
+      Serial.println(delta, DEC);
       firing = true;
       digitalWriteFast(LED_BUILTIN,true);
       delay(timeToActivate);
@@ -181,18 +177,13 @@ void loop() {
 void adc0_isr(void) {
 //    if (transition)
 //      return;
-    unsigned long temp = micros();
-    deltaRead = temp - lastRead;
-    lastRead = temp;
     lastValue = (uint16_t) adc->adc0->analogReadContinuous();
     if (!firing) {
       if (lastValue < thresh - hysteresis) {
         lastLow = micros();
-        lowVal = lastValue;
       } 
       if (lastValue > thresh + hysteresis) {
         lastHigh = micros();
-        highVal = lastValue;
       }
     } 
     // Toggle the led
