@@ -44,6 +44,10 @@ void setup() {
 
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(readPin, INPUT);
+    pinMode(actCoil, OUTPUT);
+    digitalWrite(actCoil, LOW);
+    pinMode(bypassSense, OUTPUT);
+    digitalWrite(bypassSense, HIGH);
 
     Serial.begin(9600);
 
@@ -82,7 +86,7 @@ void setup() {
     Wire.begin();
     Wire.beginTransmission(cat5171Addr);
     Wire.write(byte(0x00));
-    Wire.write(64);
+    Wire.write(14);
     Wire.endTransmission();
 
     delay(500);

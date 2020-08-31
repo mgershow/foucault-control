@@ -8,10 +8,17 @@
 *  Write t to check if the voltage agrees with the comparison in the setup()
 *  Write s to stop the conversion, you can restart it writing r.
 */
-
+ #include <Adafruit_LIS2MDL.h>
+#include <Adafruit_Sensor.h>
 #include <ADC.h>
 #include <ADC_util.h>
 #include <Wire.h>
+
+Adafruit_LIS2MDL lis2mdl = Adafruit_LIS2MDL(12345);
+#define LIS2MDL_CLK 13
+#define LIS2MDL_MISO 12
+#define LIS2MDL_MOSI 11
+#define LIS2MDL_CS 10
 
 const int readPin = A1; // ADC0
 
@@ -22,16 +29,18 @@ const int cat5171Addr = 44;
 //const int readPin2 = A3; // ADC1
 //const int readPin3 = A2; // ADC0 or ADC1
 
-uint16_t thresh = 15650;
-uint16_t hysteresis = 200;
-uint16_t lastValue;
+float thresh = 12800;
+uint16_t hysteresis = (uint16_t) (.025/3.3 * 65536);
+uint16_t lastValue = 0;
 bool state;
 bool transition;
 bool firing;
-int timeToActivate = 150;
-int durToActivate = 5;
-int retriggerDelay = 500;
+int timeToActivate = 350;
+int durToActivate = 40;
+int retriggerDelay = 50;
 bool dirToActivate = false;
+
+volatile bool newadc = false;
 
 unsigned long lastLow;
 unsigned long lastHigh;
@@ -42,12 +51,21 @@ uint16_t highVal;
 
 unsigned long maxTransitionInterval = 10000; //microseconds
 
+float lastCrossing = 0;
+sensors_event_t lastevent;
 ADC *adc = new ADC(); // adc object
 
 void setup() {
 
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(readPin, INPUT);
+
+    
+    pinMode(actCoil, OUTPUT);
+    digitalWrite(actCoil, LOW);
+    pinMode(bypassSense, OUTPUT);
+    digitalWrite(bypassSense, HIGH);
+
 
     Serial.begin(9600);
 
@@ -76,17 +94,41 @@ void setup() {
     adc->adc0->startContinuous(readPin);
     //adc->startContinuousDifferential(A10, A11, ADC_0);
 
-   
+    while(!Serial) {
+      delay(10);
+    }
+//    thresh = 0;
+//    for (int j = 0; j < 1000; ++j) {
+//      while(!newadc) {
+//        delayMicroseconds(100);
+//      }
+//      newadc = false;
+//      thresh += lastValue;
+//    }
+//    thresh = thresh/1000;
+//    
+    
+    Serial.print("thresh = ");
+    Serial.println(thresh);
 
-    pinMode(actCoil, OUTPUT);
-    digitalWrite(actCoil, LOW);
-    pinMode(bypassSense, OUTPUT);
-    digitalWrite(bypassSense, HIGH);
+    lis2mdl.enableAutoRange(true);
+
+  /* Initialise the sensor */
+  if (!lis2mdl.begin()) {  // I2C mode
+  //if (! lis2mdl.begin_SPI(LIS2MDL_CS)) {  // hardware SPI mode
+  //if (! lis2mdl.begin_SPI(LIS2MDL_CS, LIS2MDL_CLK, LIS2MDL_MISO, LIS2MDL_MOSI)) { // soft SPI
+    /* There was a problem detecting the LIS2MDL ... check your connections */
+    Serial.println("Ooops, no LIS2MDL detected ... Check your wiring!");
+    while (1) delay(10);
+  }
+
+  /* Display some basic information on this sensor */
+  lis2mdl.printSensorDetails();
 
     Wire.begin();
     Wire.beginTransmission(cat5171Addr);
     Wire.write(byte(0x00));
-    Wire.write(10);
+    Wire.write(9);
     Wire.endTransmission();
 
     delay(500);
@@ -161,6 +203,11 @@ void loop() {
 
     if (transition) {
       double deltaT = lastLow > lastHigh ? lastLow-lastHigh : lastHigh - lastLow;
+      float crosstime = (lastLow + lastHigh)/2;
+      float period = (crosstime - lastCrossing)*0.000001;
+      Serial.print ("period = ");
+      Serial.println(period,2);
+      lastCrossing = crosstime;
       double deltaV = highVal - lowVal;
       Serial.print("slope = ");
       Serial.println(deltaV/deltaT, DEC);
@@ -174,6 +221,24 @@ void loop() {
       transition = false;
       delay(retriggerDelay);
       firing = false;
+      if (period > 0 && period < 3) {
+       // Serial.print(period*500 - retriggerDelay - timeToActivate - durToActivate, DEC);
+        if (period*500 > retriggerDelay + timeToActivate + durToActivate) {
+          delay(period*500 - retriggerDelay - timeToActivate - durToActivate);
+        }
+        sensors_event_t event;
+      lis2mdl.getEvent(&event);
+      double deltaX = event.magnetic.x - lastevent.magnetic.x;
+      double deltaY = event.magnetic.y - lastevent.magnetic.y;
+      if (deltaY < 0) {
+        deltaY = -deltaY;
+        deltaX = -deltaX;
+      }
+      lastevent = event;
+      Serial.print("theta = ");
+      Serial.println(atan2(deltaY, deltaX)*180/3.14159,2);
+      }
+      
     } 
     //delay(100);
 }
@@ -185,6 +250,7 @@ void adc0_isr(void) {
     deltaRead = temp - lastRead;
     lastRead = temp;
     lastValue = (uint16_t) adc->adc0->analogReadContinuous();
+    newadc = true;
     if (!firing) {
       if (lastValue < thresh - hysteresis) {
         lastLow = micros();

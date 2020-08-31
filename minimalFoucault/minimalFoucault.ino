@@ -9,10 +9,15 @@
 #define micro 0.000001f
 
 
-Adafruit_LIS2MDL lis2mdl = Adafruit_LIS2MDL(1);
+Adafruit_LIS2MDL lis2mdl = Adafruit_LIS2MDL(12345);
+#define LIS2MDL_CLK 13
+#define LIS2MDL_MISO 12
+#define LIS2MDL_MOSI 11
+#define LIS2MDL_CS 10
 ADC *adc = new ADC(); // adc object
 
 IntervalTimer magTimer;
+IntervalTimer statusTimer;
 
 const int detPin = A1;
 
@@ -61,6 +66,8 @@ float pulseDuration = 0.005;
 
 float lastDisplayedCrossing = 0;
 
+bool getstatus = false;
+
 //on teensy LC with 32 averages and everything at VERY_LOW_SPEED, sampling rate is 2 kHz; 200 samples = 100 ms; 20 samples = 10 ms
 CircularBuffer<analogReadingT, 200> analogBuffer; //1200 bytes + overhead
 using index_t = decltype(analogBuffer)::index_t;
@@ -79,16 +86,39 @@ void setup() {
   digitalWrite(bypassSensePin, HIGH);
   pinMode(detPin, INPUT);
 
-  Wire.begin();
+   Wire.begin();
+
+//  Wire.requestFrom(cat5171Addr, 1);
+//  byte val = Wire.read();
+//  Serial.print("CAT5171 value is ");
+//  Serial.println(
+//  
   Wire.beginTransmission(cat5171Addr);
-  Wire.write(10);
+  Wire.write(0);
+  Wire.write(14);
   Wire.endTransmission();
 
   
 
-  Serial.begin(115200);
-  
+  Serial.begin(9600);
+  while(!Serial) {
+    delay(10);
+  }
+  Serial.println("hello there");
   //setup analog input, adapted from teensy example
+
+Serial.println("setting up mag sensor");
+  lis2mdl.enableAutoRange(true);
+
+  //setup mag sensor, adapted from adafruit example
+  if (!lis2mdl.begin()) {  // I2C mode
+    Serial.println("Ooops, no LIS2MDL detected ... Check your wiring!");
+        while (1) delay(10);
+
+  }
+    lis2mdl.printSensorDetails();
+  
+  Serial.println("magnetometer setup");
 
    adc->adc0->setAveraging(32); // max appears to be 32
    adc->adc0->setResolution(16); // set bits of resolution
@@ -98,18 +128,27 @@ void setup() {
    adc->adc0->enableInterrupts(adc0_isr);
    adc->adc0->startContinuous(detPin);
 
-  //setup mag sensor, adapted from adafruit example
-  if (!lis2mdl.begin()) {  // I2C mode
-    while (!Serial)
-      delay(10); // adafruit setup code
-    Serial.println("Ooops, no LIS2MDL detected ... Check your wiring!");
-  }
+  
+  
+//  if (!magTimer.begin(mag_isr, 10000)) {
+//    //magnetometer updates at 100 Hz, T = 10^4 us
+//    Serial.println("mag timer failed to start");
+//  }
+//  if (!statusTimer.begin(status_isr, 1000000)) {
+//    Serial.println("status timer failed to start");
+//  }
+  Serial.println("filling buffer");
+    Serial.print("buffer has ");
+    Serial.print(analogBuffer.available());
+    Serial.println(" available");
 
-  magTimer.begin(mag_isr, 10000); //magnetometer updates at 100 Hz, T = 10^4 us
-
-  while(!analogBuffer.isFull()) {
-    delay(10);
-  }
+      
+//  while(!analogBuffer.isFull()) {
+//
+//    Serial.print("buffer has ");
+//    Serial.print(analogBuffer.available());
+//    Serial.println(" available");
+//  }
   triggerThresh = meanAnalogValue(100);
   Serial.print("trigger threshold set to ");
   Serial.println(triggerThresh);
@@ -117,9 +156,10 @@ void setup() {
 }
 
 void loop() {
-  detectorLoop();
-  pulseLoop();
-  magLoop();
+  Serial.println("loop");
+ // detectorLoop();
+ // pulseLoop();
+  // magLoop();
   displayLoop();
 }
 
@@ -127,9 +167,16 @@ void acd0_isr(void) {
   analogReadingT reading;
   reading.us = micros();
   reading.val = adc->adc0->analogReadContinuous();
+  Serial.println("hi");
   noInterrupts();
   analogBuffer.push(reading);
   interrupts();
+  Serial.println("bye");
+}
+
+void status_isr (void) {
+  getstatus = true;
+  Serial.println("foo bar");
 }
 
 void mag_isr(void) {
@@ -140,9 +187,11 @@ void mag_isr(void) {
   reading.x = lis2mdl.raw.x;
   reading.y = lis2mdl.raw.y;
   reading.z = lis2mdl.raw.z;
+  //Serial.println("mag_isr");
   noInterrupts();
   magBuffer.push(reading);
   interrupts();
+ //Serial.println("mag_isr_done");
 }
 
 void fitAnalogLine (index_t numel, float thresh, float &slope, float &xintercept) {
@@ -251,6 +300,16 @@ void magLoop() {
 }
 
 void displayLoop() {
+  if (getstatus) {
+    getstatus = false;
+    Serial.print("analog buffer has ");
+    Serial.print(analogBuffer.available());
+    Serial.println(" available");
+    Serial.print("mag buffer has ");
+    Serial.print(magBuffer.available());
+    Serial.println(" available");
+
+  }
   if (crossingBuffer.size() < 2 || crossingBuffer.last().us == lastDisplayedCrossing) {
     return;
   }
@@ -277,6 +336,7 @@ void displayLoop() {
   Serial.print(theta*radian, 2);
   Serial.println (" deg.");
 }
+
 
 bool detectCrossing(index_t &numToCrossing) {
    uint16_t val = analogBuffer.last().val;
