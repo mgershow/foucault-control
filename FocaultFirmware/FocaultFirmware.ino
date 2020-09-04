@@ -396,7 +396,8 @@ void pollLEDIndicators() {
   if (readyForCrossing) {
     phaseFrac = 0;
   }
-  if (true) {  
+  
+  if (restarted) {  
     phaseFrac = (((int) ledT)/8000.0);
     if (ledT > 8000) {
       ledT = ledT - 8000;
