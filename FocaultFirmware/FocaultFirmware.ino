@@ -10,7 +10,7 @@
 #define mega 1000000.f
 #define micro 0.000001f
 
-#define NUM_CMD_DATA_BYTES 4
+#define NUM_CMD_DATA 4
 #define CHAR_BUF_SIZE 128
 
 #define LEGACY 
@@ -24,6 +24,8 @@ IntervalTimer agrTimer;
 typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
 typedef enum {NONE, DETVAL, MAGX, MAGY, MAGZ, ACCX, ACCY, ACCZ} TransmitTypeT;
+
+const int indicatorPins[] = {0,1,2,3,4,5,6,7};
 
 typedef struct {
   unsigned long us;
@@ -88,6 +90,10 @@ const int cat5171Addr = 44;
 const int detectorPin = A1;
 const int refPin = A0;
 
+
+const float slopeMult = 50.35f; 
+const float radian = 57.295779513082321f;
+
 /***************************************************************/
 /******************* configurations ***************************/
 float pulseDuration = 0.01; //seconds
@@ -96,32 +102,35 @@ float hysteresis = -0.025; // volts, - indicates trigger on falling
 bool autoFire = true; //whether to auto fire
 float retriggerDelay = 0.05; //seconds AFTER pulse delivery
 
-float halfPeriod;
+float vref = 1.25;
 
+int verbosity = 2;
 
-/********************* GLOBALS ********************************/
+/********************* state GLOBALS ********************************/
 
 volatile bool newDetector;
 volatile bool newAGR;
 
-float vref = 1.25;
 
-volatile Reading1T lastHigh;
-volatile Reading1T lastLow;
-volatile Reading1T lastReading;
+Reading1T lastHigh;
+Reading1T lastLow;
+Reading1T lastReading;
 
 volatile bool readyForCrossing = true;
 
 volatile bool hasMag = false;
 volatile bool hasAcc = false;
 
-const float slopeMult = 50.35f; 
-const float radian = 57.295779513082321f;
+float halfPeriod;
+
 
 crossingT lastCrossing;
+
+bool restarted = true;
+
 /********************* hardware control **************************/
 
-void activateCoil(bool activate) {
+void setCoil(bool activate) {
   #ifdef LEGACY
     digitalWrite(coilOffPin, !activate);
   #endif
@@ -140,6 +149,16 @@ void setLED (uint8_t level) {
   analogWrite(actLEDPin, level);
 }
 
+
+void setGain(byte g) {
+  Wire.beginTransmission(cat5171Addr);
+  Wire.write(byte(0));
+  Wire.write(g);
+  Wire.endTransmission();
+}
+
+/*************** setup *************************************/
+
 void setupPins() {
   #ifdef LEGACY
    pinMode(coilOffPin, OUTPUT);
@@ -148,6 +167,9 @@ void setupPins() {
   #endif
   pinMode(detectorPin, INPUT);
   pinMode(refPin, INPUT);
+  for (int j = 0; j < 8; ++j) {
+    pinMode(indicatorPins[j], OUTPUT);
+  }
 }
 
 void setupADC() {
@@ -184,16 +206,21 @@ void setupAGR() {
   // Enable the accelerometer (100Hz)
   // ctrl1.write(0x57);
 
+  //Serial.println("a");
   if (!hasAcc) {
     hasAcc = accel.begin();
     accel.setRange(LSM303_RANGE_2G);
     accel.setMode(LSM303_MODE_HIGH_RESOLUTION);
   }
+ // Serial.println("b");
   if (!hasMag) {
     lis2mdl.enableAutoRange(true);
     hasMag = lis2mdl.begin();  
-    lis2mdl.setDataRate(lis2mdl_rate_t::LIS2MDL_RATE_100_HZ);
+    if (hasMag) {
+      lis2mdl.setDataRate(lis2mdl_rate_t::LIS2MDL_RATE_100_HZ);
+    }
   }
+ // Serial.println("c");
 }
 
 void startAGRTimer() {
@@ -201,27 +228,50 @@ void startAGRTimer() {
     agrTimer.begin(agr_isr, 10000); //magnetometer updates at 100 Hz, T = 10^4 us
 }
 
-void setGain(byte g) {
-  Wire.beginTransmission(cat5171Addr);
-  Wire.write(byte(0));
-  Wire.write(g);
-  Wire.endTransmission();
+
+
+void setup() {
+  // put your setup code here, to run once:
+  setupPins();
+  digitalWrite(indicatorPins[0], HIGH);
+  Serial.begin(9600);
+  while(!Serial) {
+    digitalWrite(indicatorPins[0], LOW);
+    delay(50);
+    digitalWrite(indicatorPins[0], HIGH);
+    delay(50);   
+  }
+  Wire.begin();
+  setGain(1);
+//  Serial.println("hi");
+//  Serial.println(1);
+  setupADC();
+ // Serial.println(2);
+  setupAGR();
+ // Serial.println(3);
+  startAGRTimer();
+  sendMessage("setup complete", 1);
 }
 
 /**************** ISRs **********************************/
 
 
-void acd0_isr(void) {
-  lastADCReading.us = micros();
-  lastADCReading.val = 3.3/adc->adc0->getMaxValue()*((uint16_t) adc->adc0->analogReadContinuous()) - vref;
+void adc0_isr(void) {
+  lastReading.us = micros();
+  lastReading.val = 3.3/adc->adc0->getMaxValue()*((uint16_t) adc->adc0->analogReadContinuous()) - vref;
   newDetector = true;
 }
 
 void sync_isr(void) {
-   lastADCReading.us = micros();
+  #ifdef ADC_DUAL_ADCS
+   lastReading.us = micros();
    ADC::Sync_result result = adc->readSynchronizedContinuous();
-   lastADCReading.val = 3.3/adc->adc0->getMaxValue()*(result.result_adc0-result.result_adc1); 
+   lastReading.val = 3.3/adc->adc0->getMaxValue()*(result.result_adc0-result.result_adc1); 
    newDetector = true;
+  #else
+   adc0_isr();
+  #endif
+   
 }
 
 void agr_isr(void) {
@@ -230,19 +280,42 @@ void agr_isr(void) {
 
 /*********** polling ********************************/
 
+elapsedMillis loopT;
+int ctr = 0;
+void loop() {
+  //setLEDIndicators(1);
+  pollADC();
+  //setLEDIndicators(2);
+  pollAGR();
+  //setLEDIndicators(3);
+  pollTransmit();
+  //setLEDIndicators(4);
+  pollEvent();
+  //setLEDIndicators(5);
+  pollSerial();
+ // ++ctr;
+//  if (loopT >= 1000) {
+//    sendMessage("loop period = " + String(((int)loopT)/ctr), 2);
+//    loopT = loopT - 1000;
+//    ctr = 0;
+//  }
+  pollLEDIndicators();
+
+}
+
 void pollADC (void) {
-  if !newDetector {
+  if (!newDetector) {
     return;
   }
   newDetector = false;
-  analogTransmitBuffer.unshift(lastReading);
-  if (lastReading > abs(hysteresis)) {
+  analogTransmitFifo.unshift(lastReading);
+  if (lastReading.val > abs(hysteresis)) {
     lastHigh = lastReading;
   }
-  if (lastReading < -abs(hysteresis)) {
+  if (lastReading.val < -abs(hysteresis)) {
     lastLow = lastReading;
   }
-  if (readyForCrossing && hysteresis < 0 && lastLow.us > lastHigh.us || hysteresis > 0 && lastHigh.us > lastLow.us) {
+  if (readyForCrossing && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) {
     float dt = lastLow.us - lastHigh.us;
     float tm = 0.5*lastLow.us + 0.5*lastHigh.us;
     float dv = lastLow.val - lastHigh.val;
@@ -259,16 +332,17 @@ void pollADC (void) {
  
 }
 
+elapsedMillis agrT;
 void pollAGR(void) {
-  if !newAGR {
+  if (!newAGR) {
     return;
   }
   newAGR = false;
   Reading3T reading;
-  reading.us = us;
+  reading.us = micros();
+  sensors_event_t event;
 
   if (hasAcc) {
-    sensors_event_t event;
     accel.getEvent(&event);
     reading.x = event.acceleration.x;
     reading.y = event.acceleration.y;
@@ -284,13 +358,14 @@ void pollAGR(void) {
     magTransmitFifo.unshift(reading);
   }
 
-  if (!hasMag || !hasAcc) {
-    setupAGR(); //could just call setupAGR because of the checks inside
-  }
+//  if (!hasMag || !hasAcc && agrT > 1000) {
+//    agrT = agrT - 1000;
+//    setupAGR(); 
+//  }
   
 }
 
-void pollTrasmit() {
+void pollTransmit() {
   if (!analogTransmitFifo.isEmpty()) {
     sendReading1(analogTransmitFifo.pop(), DETVAL); 
   }
@@ -308,10 +383,38 @@ void pollEvent() {
   }
 }
 
+elapsedMillis ledT;
+
+void setLEDIndicators(byte v) {
+  for (int j = 0; j < 8; ++j) {
+    digitalWrite(indicatorPins[j],bitRead(v,j));
+  }
+}
+
+void pollLEDIndicators() {
+  float phaseFrac = (micros()-lastCrossing.us)*(180.0/pulsePhase)/halfPeriod;
+  if (readyForCrossing) {
+    phaseFrac = 0;
+  }
+  if (true) {  
+    phaseFrac = (((int) ledT)/8000.0);
+    if (ledT > 8000) {
+      ledT = ledT - 8000;
+    }
+  }
+  for (int j = 0; j < 8; ++j) {
+    digitalWrite(indicatorPins[j],j < ceil(phaseFrac*8));
+  }
+}
+
+void pollSerial() {
+  processSerialLine();
+}
 
 /********** other ****************/
 
 void setFiringAction(unsigned long us) {
+  restarted = false;
   readyForCrossing = false;
   EventT event;
   event.us = us;
@@ -327,33 +430,60 @@ void setFiringAction(unsigned long us) {
   addEvent(event);
 }
 
+
 void addEvent (EventT event) {
   eventFifo.unshift(event); //todo insert sorted by time
 }
 
 
 void sendReading1 (Reading1T reading, TransmitTypeT t) {
-  sendDataAsText (t, reading.us, reading.val);
+  sendDataAsText ((byte) t, reading.us, reading.val);
 }
 
 void sendReading3 (Reading3T reading, TransmitTypeT xtype) {
   //xtype is MAGX or ACCELX depending on whether mag or accel is sent
-  sendDataAsText(xtype, reading.us, reading.x);
-  sendDataAsText(ytype, reading.us, reading.y);
-  sendDataAsText(ztype, reading.us, reading.z);
+  sendDataAsText((byte) xtype, reading.us, reading.x);
+  sendDataAsText((byte) xtype+ byte(1), reading.us, reading.y);
+  sendDataAsText((byte) xtype+ byte(2), reading.us, reading.z);
 }
 
-void sendDataAsText(TransmitTypeT t, unsigned long us, float data) {
-  Serial.print((byte) t);
+void sendDataAsText(byte ttype, unsigned long us, float data) {
+  Serial.print(ttype);
   Serial.print(" ");
   Serial.print(us, DEC);
   Serial.print(" ");
   Serial.println(data, 8); 
 }
 
+
+int readLineSerial(char buff[], int buffersize, unsigned int timeout) {
+  int i = 0;
+  if (!Serial.available()) {
+    return 0;
+  }
+  elapsedMicros t0;
+  while (i < buffersize-1 && (Serial.available() || t0 < timeout)) {
+    if (!Serial.available()) {
+      continue;
+    }
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (i > 0) { //discard newline characters at beginning of string (in case of \n\r)
+        buff[i+1] = '\0';
+        return i; //positive return value 
+      }
+    } else {
+      buff[i++] = c;
+    }
+  }
+  return -i; //0 if nothing read, negative value if read was incomplete  
+}
+
+
 void processSerialLine() {
   char buff[CHAR_BUF_SIZE];
-  int rv = readLineSerial(buff, CHAR_BUF_SIZE, 500);
+  int rv;
+  rv = readLineSerial(buff, CHAR_BUF_SIZE, 500);
   if (rv < 0) {
     Serial.println("line reading failed");
     return; 
@@ -361,10 +491,11 @@ void processSerialLine() {
   if (rv == 0) {
     return;
   }
+  restarted = false; //received a command
   int wsoff = 0;
   for (wsoff = 0; isspace(buff[wsoff]) && wsoff < rv; ++wsoff); //get rid of leading whitespace
   CommandT c;
-  sscanf(buff + wsoff, "%c %ul %i %i %i %i", c.cmd, c.us, c.data, c.data + 1, c.data + 2, c.data +3); //change if num_data_bytes changes
+  sscanf(buff + wsoff, "%c %lu %i %i %i %i", &c.cmd, &c.us, c.data, c.data + 1, c.data + 2, c.data +3); //change if num_data_bytes changes
   parseCommand(c);  
 }
 
@@ -377,7 +508,7 @@ void parseCommand (CommandT c) {
       return;
     case 'C':
       if (c.us <= micros()) {
-        activateCoil(true);
+        setCoil(true);
         us = micros();
       } else {
         event.us = c.us;
@@ -394,7 +525,7 @@ void parseCommand (CommandT c) {
       return;
     case 'D': {
       if (c.us <= micros()) {
-        activateCoil(false);
+        setCoil(false);
       } else {
         event.us = c.us;
         event.action = SET_COIL;
@@ -413,7 +544,18 @@ void parseCommand (CommandT c) {
         addEvent(event);
       }
       return;
-    }      
+    case 'A':
+      if (c.data[0] > 0) {
+        autoFire = true;
+        pulseDuration = c.data[0];
+        pulsePhase = c.data[1];
+        hysteresis = c.data[2];
+        sendMessage("auto enabled", 1);
+      } else {
+        sendMessage("auto disabled", 1);
+      }
+    }     
+     
   }
 }
 
@@ -436,247 +578,8 @@ bool doEvent (EventT event) {
   return true;
 }
 
-
-int readLineSerial(char buff[], int buffersize, int timeout = 2000) {
-  int i = 0;
-  if (!Serial.available()) {
-    return 0;
+void sendMessage(String msg, int v) {
+  if (verbosity >= v) {
+    Serial.println(msg);
   }
-  elapsedMicros t0;
-  while (i < buffersize-1 && (Serial.available() || t0 < timeout)) {
-    char c = Serial.read();
-    if (c == '\n' || c == '\r') {
-      if (i > 0) { //discard newline characters at beginning of string (in case of \n\r)
-        buff[i+1] = '\0';
-        return i; //positive return value 
-      }
-    } else {
-      buff[i++] = c;
-    }
-  }
-  return -i; //0 if nothing read, negative value if read was incomplete  
-}
-
-
-void setup() {
-  // put your setup code here, to run once:
-
-  pinMode(actCoilPin, OUTPUT);
-  pinMode(bypassSensePin, OUTPUT);
-  digitalWrite(bypassSensePin, HIGH);
-  pinMode(detPin, INPUT);
-  Wire.begin();
-
-
-  
-
-  Serial.begin(115200);
-  
-  //setup analog input, adapted from teensy example
-
-   adc->adc0->setAveraging(32); // max appears to be 32
-   adc->adc0->setResolution(16); // set bits of resolution
-
-   adc->adc0->setConversionSpeed(ADC_CONVERSION_SPEED::VERY_LOW_SPEED); // change the conversion speed
-   adc->adc0->setSamplingSpeed(ADC_SAMPLING_SPEED::VERY_LOW_SPEED); // change the sampling speed
-   adc->adc0->enableInterrupts(adc0_isr);
-   adc->adc0->startContinuous(detPin);
-
-  //setup mag sensor, adapted from adafruit example
-  if (!lis2mdl.begin()) {  // I2C mode
-    while (!Serial)
-      delay(10); // adafruit setup code
-    Serial.println("Ooops, no LIS2MDL detected ... Check your wiring!");
-  }
-
-
-  while(!analogBuffer.isFull()) {
-  }
-  triggerThresh = meanAnalogValue(100);
-  Serial.print("trigger threshold set to ");
-  Serial.println(triggerThresh);
-  
-}
-
-void loop() {
-  detectorLoop();
-  pulseLoop();
-  magLoop();
-  displayLoop();
-}
-
-
-
-void mag_isr(void) {
-  newMagReading = true;
-}
-
-void instrumentLoop() {
-  if (newADCReading) {
-    newADCReading = false;
-    analogBuffer.push(newADCReading);
-  }
-  if (newMagnetometerReading) {
-    unsigned long us = micros();
-    newMagnetometerReading = false;
-    sensors_event_t event;
-    lis2mdl.getEvent(&event); //needed to populate lis2mdl.raw
-    magReadingT mr;
-    mr.us = us;
-    mr.x = lis2mdl.raw.x;
-    mr.y = lis2mdl.raw.y;
-    mr.z = lis2mdl.raw.z;
-    
-    
-  }
-}
-
-void fitAnalogLine (index_t numel, float thresh, float &slope, float &xintercept) {
-  //adapted from example in numerical recipes in C, 2nd edition (1992). 
-  //fits a line of value vs. time; finds the time at which value = thresh, and finds the slope dval/dtime
-  if (numel == 0) {
-    numel = analogBuffer.size();    
-  }
-  index_t sz = analogBuffer.size();
-  numel = min(numel, sz);
-  unsigned long t0 = analogBuffer[analogBuffer.size() - numel].us;
-  float sx = 0, sy = 0, sxx = 0, sxy = 0;
-
-  //compute: time = a + b*(val - thresh). xintercept = a, slope = 1/b;
-  for (index_t j = sz - numel; j < sz; ++j) {
-    float y = (float) (analogBuffer[j].us - t0); //use unsigned math to take care of rollovers
-    float x = analogBuffer[j].val - thresh;
-    sx += x;
-    sy += y;
-    sxx += x*x;
-    sxy += x*y;
-  }
-  float d = numel*sxx - sx*sx;
-  xintercept = t0 + (sxx*sy - sx*sxy)/d;
-  slope = d / (numel*sxy - sx*sy);
-  
-}
-
-float meanAnalogValue (index_t numel) {
-   if (numel == 0) {
-    numel = analogBuffer.size();    
-  }
-  index_t sz = analogBuffer.size();
-  numel = min(numel, sz);
-
-  float s = 0;
-
-  //compute: time = a + b*(val - thresh). xintercept = a, slope = 1/b;
-  for (index_t j = sz - numel; j < sz; ++j) {
-    s += analogBuffer[j].val;
-  }
-  return s/numel;
-}
-
-void detectorLoop() {
-  index_t numToCrossing;
-  if (!crossingBuffer.isEmpty() && micros() - crossingBuffer.last().us < mega*(retriggerDelay + pulseDelayFraction * halfPeriod)) { //too soon after last one
-    return; 
-  }
-  if (!detectCrossing(numToCrossing)) {
-    return;
-  }
-  if (numToCrossing < halfMinLineSamples) {
-    return;
-  }
-  crossingT crossing;
-  index_t sz = analogBuffer.size();
-  numToCrossing = min(sz/2, numToCrossing);
-  fitAnalogLine(2*numToCrossing, triggerThresh, crossing.slope, crossing.us);
-  if (!crossingBuffer.isEmpty()) {
-    halfPeriod = (crossing.us - crossingBuffer.last().us)*micro;
-  }
-  noInterrupts();
-  crossingBuffer.push(crossing);
-  interrupts();
-  pulseArmed = true;
-  magArmed = true;
-}
-
-void pulseLoop() {
-  if (!pulseArmed || crossingBuffer.isEmpty()) {
-    return;
-  }
-  if (micros() - crossingBuffer.last().us < pulseDelayFraction * halfPeriod * mega) {
-    return;
-  }
-  pulseArmed = false;
-  digitalWrite(actCoilPin, HIGH);
-  //todo: rewrite using interrupts or timer pins
-  if (pulseDuration < .016) {
-    delayMicroseconds(pulseDuration*mega);
-  } else {
-    delay(pulseDuration*1000);
-  }
-  digitalWrite(actCoilPin, LOW);
-}
-
-void magLoop() {
-  if (!magArmed || crossingBuffer.isEmpty()) {
-    return;
-  }
-  if (micros() - crossingBuffer.last().us < 0.5 * halfPeriod * mega) { //read at 1/4 period and 3/4 period
-    return;
-  }
-  magArmed = false;
-  crossingT crossing;
-  //todo, more sophisticated fit/averaging?
-  magReadingT mag = magBuffer.last();
-  noInterrupts();
-  crossing = crossingBuffer.pop();
-  crossing.xmag = mag.x;
-  crossing.ymag = mag.y;
-  crossingBuffer.push(crossing);
-  interrupts();
-  triggerThresh = meanAnalogValue(100); //this is when detector should be quietest, magnet is far away and not moving
-}
-
-void displayLoop() {
-  if (crossingBuffer.size() < 2 || crossingBuffer.last().us == lastDisplayedCrossing) {
-    return;
-  }
-  if (magArmed) {
-    return;
-  }
-  
-  crossingT c1 = crossingBuffer.last();
-  crossingT c2 = crossingBuffer[crossingBuffer.size()-2];
-  crossingT temp;
-  if (c1.ymag < c2.ymag) { //keep angle between 0 and 180
-    temp = c1;
-    c1 = c2;
-    c2 = temp;
-  }
-  float theta = atan2f(c1.ymag - c2.ymag, c1.xmag - c2.xmag);
-  Serial.print("crossing at ");
-  Serial.print(micro*crossingBuffer.last().us, 2);
-  Serial.print(" s: period = ");
-  Serial.print(halfPeriod*2);
-  Serial.print(" s, slope = ");
-  Serial.print(slopeMult * crossingBuffer.last().slope, 2);
-  Serial.print(" V/s, angle = ");
-  Serial.print(theta*radian, 2);
-  Serial.println (" deg.");
-}
-
-bool detectCrossing(index_t &numToCrossing) {
-   uint16_t val = analogBuffer.last().val;
-   if (!((triggerFalling && val < triggerThresh - triggerHyst) || (triggerRising && val > triggerThresh - triggerHyst))) {
-      return false;
-   }
-   bool falling = val < triggerThresh - triggerHyst; //protect against bidiretional triggering
-   for (index_t j = analogBuffer.size() - 1; j >= 0; --j) {
-      if ((falling && analogBuffer[j].val > triggerThresh) || (!falling && analogBuffer[j].val < triggerThresh)) {
-        numToCrossing = analogBuffer.size()-j;
-      }  
-      if ((falling && analogBuffer[j].val > triggerThresh + triggerHyst) || (!falling && analogBuffer[j].val < triggerThresh - triggerHyst)) {
-        return true;
-      }    
-   }
-   return false;
 }

@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Sep  4 12:10:43 2020
+
+@author: gershow
+"""
+#modified from https://github.com/BatJedi/Arduino-Oscilloscope/blob/master/project2.py
+import matplotlib.pyplot as plt
+import serial
+import time
+volt = [ ]
+tvolt = [ ];
+count = 0
+#create the serial port object
+port = serial.Serial('/dev/cu.usbmodem79720501',115200, timeout=0.5)#115200 is the standard baud rate
+print(port.is_open)
+print(port.in_waiting)
+plt.ion()
+timeToPlot = 1;
+#create the figure function
+#port.write(('G 0 1 \r\n').encode())
+def makeFig():
+    #print ("fig!")
+    fig = plt.figure(1);
+    fig.clear();
+    plt.ylim(-1.65,1.65)
+    plt.title('Waveform Oscilloscope')
+    plt.grid(True)
+    plt.ylabel('Voltage(V)')
+    plt.plot(tvolt, volt, 'b-', label='Channel 0')
+    #plt.legend(loc='lower right')
+    fig.canvas.draw()
+    fig.canvas.flush_events()
+    #time.sleep(0.001)
+while (True):
+   # if (port.in_waiting):# if the arduino replies
+  # try:
+        
+        instr = port.readline().decode('utf-8')# read the reply    
+        elems = instr.split();
+     #   
+        if (len(elems) < 3):
+            continue
+       # print(elems)
+        code = int(elems[0]);
+     #   print (code)
+        if (code == 1):
+            tvolt.append(float(elems[1])/1000000)
+            volt.append(float(elems[2]))             
+        if (len(tvolt) > 1):
+            if (tvolt[len(tvolt)-1] - tvolt[0] > timeToPlot):
+                makeFig()
+                volt.clear()
+                tvolt.clear()
+       
+  # except:
+   #     print(instr)
+    #    time.sleep(0.01)
+   # else:
+   #     print(port.in_waiting)
+        
+            
