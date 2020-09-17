@@ -1,4 +1,5 @@
-
+#include <TeensyTimerTool.h>
+using namespace TeensyTimerTool;
 #include <CircularBuffer.h>
 #include <Adafruit_LIS2MDL.h>
 #include <Adafruit_Sensor.h>
@@ -11,6 +12,7 @@
 #define micro 0.000001f
 
 #define NUM_CMD_DATA 4
+#define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
 
 //#define LEGACY 
@@ -57,7 +59,7 @@ typedef struct {
 typedef struct {
   unsigned long us;
   ActionT action;
-  int data;
+  float data[NUM_ACT_DATA];
 } EventT;
 
 //on teensy LC with 32 averages and everything at VERY_LOW_SPEED, sampling rate is 2 kHz; 200 samples = 100 ms; 20 samples = 10 ms
@@ -137,20 +139,22 @@ bool restarted = true;
 
 bool enableDataTransmission = true;
 
+OneShotTimer coilTimer(GPT1);
+
+
 /********************* hardware control **************************/
 
 
-
-void setCoil(bool activate) {
+void setCoil(bool activate, float duration = -1) {
   coilState = activate;
   #ifdef LEGACY
     digitalWrite(coilOffPin, !activate);
   #endif
     digitalWrite(actCoilPin, activate);
-//    for (int j = 0; j < 8; ++j) {
-//      digitalWrite(j, activate);
-//    }
     digitalWrite(0, activate);
+    if (duration > 0) {
+      coilTimer.trigger(duration*mega);
+    }
 }
 
 void setLED (uint8_t level) {
@@ -270,6 +274,9 @@ void setup() {
   setupAGR();
  // Serial.println(3);
   startAGRTimer();
+
+  coilTimer.begin(toggleCoil_isr);
+  
   sendMessage("setup complete", 1);
   byte g = readGain();
   sendMessage("gain = " + String(g), 1);
@@ -303,6 +310,10 @@ void sync_isr(void) {
 
 void agr_isr(void) {
   newAGR = true;
+}
+
+void toggleCoil_isr(void) {
+  setCoil(!coilState, -1);
 }
 
 /*********** polling ********************************/
@@ -393,7 +404,7 @@ void pollADC (void) {
     float vm = 0.5*(lastLow.val + lastHigh.val);
     crossingT crossing;
     crossing.us = tm - dv/dt*vm;
-    crossing.slope = dv/dt;
+    crossing.slope = mega*dv/dt;
     halfPeriod = crossing.us - lastCrossing.us;
     sendMessage("crossing at " + String(crossing.us * micro) + " slope = " + String(crossing.slope) + " halfPeriod = " + String(halfPeriod * micro), 1); 
    
@@ -512,14 +523,15 @@ void setFiringAction(unsigned long us) {
   EventT event;
   event.us = us;
   event.action = SET_COIL;
-  event.data = 1;
+  event.data[0] = 1;
+  event.data[1] = pulseDuration;
   addEvent(event);
-  event.us = event.us + pulseDuration*mega;
-  event.data = 0;
-  addEvent(event);
-  event.us = event.us + retriggerDelay*mega;
+//  event.us = event.us + pulseDuration*mega;
+//  event.data = 0;
+//  addEvent(event);
+  event.us = event.us + (pulseDuration + retriggerDelay)*mega;
   event.action = SET_READY;
-  event.data = 1;
+  event.data[0] = 1;
   addEvent(event);
  
   
@@ -532,7 +544,7 @@ void setFiringAction(unsigned long us) {
 //data retrieval can be performed at tail via a pop() operation or from head via an shift()
 
 void addEvent (EventT event) {
-   sendMessage("event set for " + String(event.us * micro) + " action = " + String(event.action) + " data = " + String(event.data), 1); 
+   sendMessage("event set for " + String(event.us * micro) + " action = " + String(event.action) + " data[0] = " + String(event.data[0]) +  " data[1] = " + String(event.data[1]), 1); 
    
   if (eventFifo.isEmpty()) {
     eventFifo.unshift(event);
@@ -632,14 +644,15 @@ void parseCommand (CommandT c) {
         event.us = c.us;
         us = c.us;
         event.action = SET_COIL;
-        event.data = 1;
+        event.data[0] = 1;
+        event.data[1] = c.data[0];
         addEvent(event);
       }
-      if (c.data[0] > 0) {
-        event.us = us + c.data[0];
-        event.action = SET_COIL;
-        event.data = 0;
-      }
+//      if (c.data[0] > 0) {
+//        event.us = us + c.data[0];
+//        event.action = SET_COIL;
+//        event.data = 0;
+//      }
       return;
     case 'D': {
       if (c.us <= micros()) {
@@ -647,7 +660,8 @@ void parseCommand (CommandT c) {
       } else {
         event.us = c.us;
         event.action = SET_COIL;
-        event.data = 0;
+        event.data[0] = 0;
+        event.data[1] = -1;
         addEvent(event);
       }
       return;
@@ -658,7 +672,7 @@ void parseCommand (CommandT c) {
       } else {
         event.us = c.us;
         event.action = SET_LED;
-        event.data = c.data[0];
+        event.data[0] = c.data[0];
         addEvent(event);
       }
       return;
@@ -684,13 +698,13 @@ bool doEvent (EventT event) {
   }
   switch(event.action) {
     case SET_COIL:
-      setCoil(event.data);
+      setCoil(event.data[0], event.data[1]);
       break;
     case SET_LED:
-      setLED(event.data);
+      setLED(event.data[0]);
       break;
     case SET_READY:
-      setReadyForCrossing(event.data);
+      setReadyForCrossing(event.data[0]);
       break;   
   }
   return true;
