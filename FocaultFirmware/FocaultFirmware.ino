@@ -13,7 +13,7 @@
 #define NUM_CMD_DATA 4
 #define CHAR_BUF_SIZE 128
 
-#define LEGACY 
+//#define LEGACY 
 
 Adafruit_LIS2MDL lis2mdl = Adafruit_LIS2MDL(1);
 Adafruit_LSM303_Accel_Unified accel = Adafruit_LSM303_Accel_Unified(54321);
@@ -23,7 +23,7 @@ IntervalTimer agrTimer;
 
 typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
-typedef enum {NONE, DETVAL, MAGX, MAGY, MAGZ, ACCX, ACCY, ACCZ} TransmitTypeT;
+typedef enum {NONE, DETVAL, MAGX, MAGY, MAGZ, ACCX, ACCY, ACCZ, COIL} TransmitTypeT;
 
 const int indicatorPins[] = {0,1,2,3,4,5,6,7};
 
@@ -62,17 +62,20 @@ typedef struct {
 
 //on teensy LC with 32 averages and everything at VERY_LOW_SPEED, sampling rate is 2 kHz; 200 samples = 100 ms; 20 samples = 10 ms
 
-CircularBuffer<Reading1T, 100> analogTransmitFifo; 
+CircularBuffer<Reading1T, 1000> analogTransmitFifo; 
 //using index_t = decltype(analogBuffer)::index_t;
 
+CircularBuffer<Reading1T, 1000> coilTransmitFifo; 
+
 //100 Hz, 10 = 100 ms
-CircularBuffer<Reading3T, 10> magTransmitFifo; 
+CircularBuffer<Reading3T, 100> magTransmitFifo; 
 
-CircularBuffer<Reading3T, 10> accelTransmitFifo; 
+CircularBuffer<Reading3T, 100> accelTransmitFifo; 
 
-CircularBuffer<CommandT, 20> commandStack;
+CircularBuffer<CommandT, 200> commandStack;
 
-CircularBuffer<EventT, 20> eventFifo;
+CircularBuffer<EventT, 1000> eventFifo;
+CircularBuffer<EventT, 1000> scratchEventStack;
 
 /**************** PIN CONFIGURATIONS  ***************************/
 
@@ -96,15 +99,17 @@ const float radian = 57.295779513082321f;
 
 /***************************************************************/
 /******************* configurations ***************************/
-float pulseDuration = 0.01; //seconds
+float pulseDuration = 0.005; //seconds
 float pulsePhase = 15; // degrees
-float hysteresis = -0.025; // volts, - indicates trigger on falling
+float hysteresis = -0.1; // volts, - indicates trigger on falling
 bool autoFire = true; //whether to auto fire
-float retriggerDelay = 0.05; //seconds AFTER pulse delivery
+float retriggerDelay = 0.25; //seconds AFTER pulse delivery
 
 float vref = 1.25;
 
 int verbosity = 2;
+
+unsigned int numADCToAvg = 16;
 
 /********************* state GLOBALS ********************************/
 
@@ -121,6 +126,8 @@ volatile bool readyForCrossing = true;
 volatile bool hasMag = false;
 volatile bool hasAcc = false;
 
+volatile bool coilState;
+
 float halfPeriod;
 
 
@@ -128,13 +135,22 @@ crossingT lastCrossing;
 
 bool restarted = true;
 
+bool enableDataTransmission = true;
+
 /********************* hardware control **************************/
 
+
+
 void setCoil(bool activate) {
+  coilState = activate;
   #ifdef LEGACY
     digitalWrite(coilOffPin, !activate);
   #endif
     digitalWrite(actCoilPin, activate);
+//    for (int j = 0; j < 8; ++j) {
+//      digitalWrite(j, activate);
+//    }
+    digitalWrite(0, activate);
 }
 
 void setLED (uint8_t level) {
@@ -155,6 +171,10 @@ void setGain(byte g) {
   Wire.write(byte(0));
   Wire.write(g);
   Wire.endTransmission();
+}
+byte readGain() {
+  Wire.requestFrom(cat5171Addr,1,true);
+  return Wire.read();
 }
 
 /*************** setup *************************************/
@@ -242,7 +262,7 @@ void setup() {
     delay(50);   
   }
   Wire.begin();
-  setGain(1);
+  setGain(0);
 //  Serial.println("hi");
 //  Serial.println(1);
   setupADC();
@@ -251,6 +271,13 @@ void setup() {
  // Serial.println(3);
   startAGRTimer();
   sendMessage("setup complete", 1);
+  byte g = readGain();
+  sendMessage("gain = " + String(g), 1);
+
+  if (enableDataTransmission) {
+    verbosity = -1;
+  }
+  
 }
 
 /**************** ISRs **********************************/
@@ -293,29 +320,73 @@ void loop() {
   pollEvent();
   //setLEDIndicators(5);
   pollSerial();
+
+  pollCoil();
+  
  // ++ctr;
 //  if (loopT >= 1000) {
 //    sendMessage("loop period = " + String(((int)loopT)/ctr), 2);
 //    loopT = loopT - 1000;
 //    ctr = 0;
 //  }
-  pollLEDIndicators();
+//  pollLEDIndicators();
 
 }
 
+elapsedMillis coilTransmitT;
+Reading1T coilReading;
+void pollCoil (void) {
+   bool trans = !coilReading.val != !coilState;
+   if (trans) {
+    coilTransmitFifo.unshift(coilReading);    
+   }
+   coilReading.us = micros();
+   coilReading.val = coilState;
+   if (trans || coilTransmitT > 100) {
+    coilTransmitFifo.unshift(coilReading);   
+    if (coilTransmitT > 100) {
+      coilTransmitT = coilTransmitT - 100;
+    }
+  }
+  
+}
+
+void setReadyForCrossing(bool r) {
+  readyForCrossing = r;
+  digitalWrite(7, r);
+}
+
+bool retrigger = false;
 void pollADC (void) {
   if (!newDetector) {
     return;
   }
   newDetector = false;
   analogTransmitFifo.unshift(lastReading);
-  if (lastReading.val > abs(hysteresis)) {
-    lastHigh = lastReading;
+  digitalWrite(1, lastReading.val > abs(hysteresis));
+
+  bool high = false;
+  bool low = false;
+  if (readyForCrossing && abs(lastReading.val) > abs(hysteresis)) {
+    if (lastReading.val > 0) {
+      high = true;
+      lastHigh = lastReading;
+      if ((hysteresis) < 0) {
+        retrigger = true;
+      }      
+    }
+    if (lastReading.val < 0) {
+      low = true;
+      lastLow = lastReading;
+      if ((hysteresis) > 0) {
+        retrigger = true;
+      }
+    }
   }
-  if (lastReading.val < -abs(hysteresis)) {
-    lastLow = lastReading;
-  }
-  if (readyForCrossing && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) {
+  digitalWrite(1,high);
+  digitalWrite(2,low);
+  if ( retrigger && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) {
+    
     float dt = lastLow.us - lastHigh.us;
     float tm = 0.5*lastLow.us + 0.5*lastHigh.us;
     float dv = lastLow.val - lastHigh.val;
@@ -324,10 +395,13 @@ void pollADC (void) {
     crossing.us = tm - dv/dt*vm;
     crossing.slope = dv/dt;
     halfPeriod = crossing.us - lastCrossing.us;
+    sendMessage("crossing at " + String(crossing.us * micro) + " slope = " + String(crossing.slope) + " halfPeriod = " + String(halfPeriod * micro), 1); 
+   
     if (autoFire && halfPeriod < 4*mega) {
        setFiringAction(crossing.us + halfPeriod*pulsePhase / 180);
     }
     lastCrossing = crossing;
+    retrigger = false;
   }
  
 }
@@ -366,14 +440,32 @@ void pollAGR(void) {
 }
 
 void pollTransmit() {
-  if (!analogTransmitFifo.isEmpty()) {
-    sendReading1(analogTransmitFifo.pop(), DETVAL); 
+  if (analogTransmitFifo.size() >= numADCToAvg) {
+    double us = 0; 
+    double val = 0;
+    Reading1T r;
+    Reading1T avgreading;
+    for (unsigned int j = 0; j < numADCToAvg; ++j) {
+      r = analogTransmitFifo.pop();
+      us += r.us;
+      val += r.val;
+    }
+    avgreading.us = us / numADCToAvg;
+    avgreading.val = val / numADCToAvg;
+    sendReading1(avgreading, DETVAL);
+    return; 
   }
   if (!magTransmitFifo.isEmpty()) {
     sendReading3(magTransmitFifo.pop(), MAGX); 
+    return;
   }
   if (!accelTransmitFifo.isEmpty()) {
-    sendReading3(accelTransmitFifo.pop(), ACCX); 
+    sendReading3(accelTransmitFifo.pop(), ACCX);
+    return; 
+  }
+  if (!coilTransmitFifo.isEmpty()) {
+    sendReading1(coilTransmitFifo.pop(), COIL);
+    return;
   }
 }
 
@@ -416,7 +508,7 @@ void pollSerial() {
 
 void setFiringAction(unsigned long us) {
   restarted = false;
-  readyForCrossing = false;
+  setReadyForCrossing(false);
   EventT event;
   event.us = us;
   event.action = SET_COIL;
@@ -429,11 +521,33 @@ void setFiringAction(unsigned long us) {
   event.action = SET_READY;
   event.data = 1;
   addEvent(event);
+ 
+  
 }
 
 
+//unshift() adds to the head
+//first() returns the element at head
+//push() adds to the tail
+//data retrieval can be performed at tail via a pop() operation or from head via an shift()
+
 void addEvent (EventT event) {
-  eventFifo.unshift(event); //todo insert sorted by time
+   sendMessage("event set for " + String(event.us * micro) + " action = " + String(event.action) + " data = " + String(event.data), 1); 
+   
+  if (eventFifo.isEmpty()) {
+    eventFifo.unshift(event);
+    return;
+  }
+
+  //make sure event is inserted in order, so that elements are sorted in order of descending us
+  //(last is earliest event; first is latest event)
+  while (!eventFifo.isEmpty() && eventFifo.first().us > event.us) {
+    scratchEventStack.push(eventFifo.shift());
+  }
+  eventFifo.unshift(event); 
+  while (!scratchEventStack.isEmpty()) {
+    eventFifo.unshift(scratchEventStack.pop());
+  }
 }
 
 
@@ -449,6 +563,9 @@ void sendReading3 (Reading3T reading, TransmitTypeT xtype) {
 }
 
 void sendDataAsText(byte ttype, unsigned long us, float data) {
+  if (!enableDataTransmission) {
+    return;
+  }
   Serial.print(ttype);
   Serial.print(" ");
   Serial.print(us, DEC);
@@ -573,7 +690,7 @@ bool doEvent (EventT event) {
       setLED(event.data);
       break;
     case SET_READY:
-      readyForCrossing = event.data;
+      setReadyForCrossing(event.data);
       break;   
   }
   return true;
