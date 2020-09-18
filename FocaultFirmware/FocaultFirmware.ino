@@ -23,6 +23,10 @@ ADC *adc = new ADC(); // adc object
 
 IntervalTimer agrTimer;
 
+
+bool enableDataTransmission = true;
+
+
 typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
 typedef enum {NONE, DETVAL, MAGX, MAGY, MAGZ, ACCX, ACCY, ACCZ, COIL} TransmitTypeT;
@@ -30,12 +34,12 @@ typedef enum {NONE, DETVAL, MAGX, MAGY, MAGZ, ACCX, ACCY, ACCZ, COIL} TransmitTy
 const int indicatorPins[] = {0,1,2,3,4,5,6,7};
 
 typedef struct {
-  unsigned long us;
+  double us;
   float val;
 } Reading1T;
 
 typedef struct {
-  unsigned long us;
+  double us;
   float x;
   float y;
   float z;
@@ -43,13 +47,13 @@ typedef struct {
 
 typedef struct {
   char cmd;
-  unsigned long us;
+  double us;
   int data[NUM_CMD_DATA];
 } CommandT;
 
 
 typedef struct {
-  float us;
+  double us;
   float slope;
  // float xmag;
  // float ymag;
@@ -57,7 +61,7 @@ typedef struct {
 
 
 typedef struct {
-  unsigned long us;
+  double us;
   ActionT action;
   float data[NUM_ACT_DATA];
 } EventT;
@@ -78,6 +82,8 @@ CircularBuffer<CommandT, 200> commandStack;
 
 CircularBuffer<EventT, 1000> eventFifo;
 CircularBuffer<EventT, 1000> scratchEventStack;
+
+
 
 /**************** PIN CONFIGURATIONS  ***************************/
 
@@ -137,11 +143,12 @@ crossingT lastCrossing;
 
 bool restarted = true;
 
-bool enableDataTransmission = true;
 
 OneShotTimer coilTimer(GPT1);
 
-
+volatile double baseTime = 0;
+volatile unsigned long lastmicros = 0;
+const double microrollover = 4294967295;
 /********************* hardware control **************************/
 
 
@@ -179,6 +186,22 @@ void setGain(byte g) {
 byte readGain() {
   Wire.requestFrom(cat5171Addr,1,true);
   return Wire.read();
+}
+
+double getTime() {
+
+  noInterrupts();
+  bool rollover = micros() < lastmicros;
+  if (rollover) {
+    baseTime += microrollover;
+  }
+  lastmicros = micros();
+  interrupts();
+  if (rollover) {
+    sendMessage("micros rollover", 1);
+  }
+
+  return baseTime + lastmicros;
 }
 
 /*************** setup *************************************/
@@ -291,14 +314,14 @@ void setup() {
 
 
 void adc0_isr(void) {
-  lastReading.us = micros();
+  lastReading.us = getTime();
   lastReading.val = 3.3/adc->adc0->getMaxValue()*((uint16_t) adc->adc0->analogReadContinuous()) - vref;
   newDetector = true;
 }
 
 void sync_isr(void) {
   #ifdef ADC_DUAL_ADCS
-   lastReading.us = micros();
+   lastReading.us = getTime();
    ADC::Sync_result result = adc->readSynchronizedContinuous();
    lastReading.val = 3.3/adc->adc0->getMaxValue()*(result.result_adc0-result.result_adc1); 
    newDetector = true;
@@ -322,12 +345,12 @@ elapsedMillis loopT;
 int ctr = 0;
 void loop() {
   //setLEDIndicators(1);
+ // setLEDIndicators(3);
+
   pollADC();
-  //setLEDIndicators(2);
   pollAGR();
-  //setLEDIndicators(3);
   pollTransmit();
-  //setLEDIndicators(4);
+ // setLEDIndicators(4);
   pollEvent();
   //setLEDIndicators(5);
   pollSerial();
@@ -351,7 +374,7 @@ void pollCoil (void) {
    if (trans) {
     coilTransmitFifo.unshift(coilReading);    
    }
-   coilReading.us = micros();
+   coilReading.us = getTime();
    coilReading.val = coilState;
    if (trans || coilTransmitT > 100) {
     coilTransmitFifo.unshift(coilReading);   
@@ -424,7 +447,7 @@ void pollAGR(void) {
   }
   newAGR = false;
   Reading3T reading;
-  reading.us = micros();
+  reading.us = getTime();
   sensors_event_t event;
 
   if (hasAcc) {
@@ -495,7 +518,7 @@ void setLEDIndicators(byte v) {
 }
 
 void pollLEDIndicators() {
-  float phaseFrac = (micros()-lastCrossing.us)*(180.0/pulsePhase)/halfPeriod;
+  float phaseFrac = (getTime()-lastCrossing.us)*(180.0/pulsePhase)/halfPeriod;
   if (readyForCrossing) {
     phaseFrac = 0;
   }
@@ -517,7 +540,7 @@ void pollSerial() {
 
 /********** other ****************/
 
-void setFiringAction(unsigned long us) {
+void setFiringAction(double us) {
   restarted = false;
   setReadyForCrossing(false);
   EventT event;
@@ -532,6 +555,7 @@ void setFiringAction(unsigned long us) {
   event.us = event.us + (pulseDuration + retriggerDelay)*mega;
   event.action = SET_READY;
   event.data[0] = 1;
+  event.data[1] = 0;
   addEvent(event);
  
   
@@ -544,7 +568,7 @@ void setFiringAction(unsigned long us) {
 //data retrieval can be performed at tail via a pop() operation or from head via an shift()
 
 void addEvent (EventT event) {
-   sendMessage("event set for " + String(event.us * micro) + " action = " + String(event.action) + " data[0] = " + String(event.data[0]) +  " data[1] = " + String(event.data[1]), 1); 
+   sendMessage("event set for " + String(event.us * micro) + " action = " + String(event.action) + " data[0] = " + String(event.data[0]) +  " data[1] = " + String(event.data[1],6), 1); 
    
   if (eventFifo.isEmpty()) {
     eventFifo.unshift(event);
@@ -574,15 +598,15 @@ void sendReading3 (Reading3T reading, TransmitTypeT xtype) {
   sendDataAsText((byte) xtype+ byte(2), reading.us, reading.z);
 }
 
-void sendDataAsText(byte ttype, unsigned long us, float data) {
+void sendDataAsText(byte ttype, double us, float data) {
   if (!enableDataTransmission) {
     return;
   }
   Serial.print(ttype);
   Serial.print(" ");
-  Serial.print(us, DEC);
+  Serial.print(us*micro, 6);
   Serial.print(" ");
-  Serial.println(data, 8); 
+  Serial.println(data, 12); 
 }
 
 
@@ -625,21 +649,22 @@ void processSerialLine() {
   int wsoff = 0;
   for (wsoff = 0; isspace(buff[wsoff]) && wsoff < rv; ++wsoff); //get rid of leading whitespace
   CommandT c;
+  c.data[0] = c.data[1] = c.data[2] = c.data[3] = 0;
   sscanf(buff + wsoff, "%c %lu %i %i %i %i", &c.cmd, &c.us, c.data, c.data + 1, c.data + 2, c.data +3); //change if num_data_bytes changes
   parseCommand(c);  
 }
 
 void parseCommand (CommandT c) {
   EventT event;
-  unsigned long us;
+  double us;
   switch(toupper(c.cmd)) {
     case 'G':
       setGain((uint8_t) c.data[0]);
       return;
     case 'C':
-      if (c.us <= micros()) {
+      if (c.us <= getTime()) {
         setCoil(true);
-        us = micros();
+        us = getTime();
       } else {
         event.us = c.us;
         us = c.us;
@@ -655,7 +680,7 @@ void parseCommand (CommandT c) {
 //      }
       return;
     case 'D': {
-      if (c.us <= micros()) {
+      if (c.us <= getTime()) {
         setCoil(false);
       } else {
         event.us = c.us;
@@ -666,9 +691,9 @@ void parseCommand (CommandT c) {
       }
       return;
     case 'L':
-      if (c.us <= micros()) {
+      if (c.us <= getTime()) {
         setLED(c.data[0]);
-        us = micros();
+        us = getTime();
       } else {
         event.us = c.us;
         event.action = SET_LED;
@@ -693,7 +718,7 @@ void parseCommand (CommandT c) {
 
 bool doEvent (EventT event) {
   //returns true if event is executed
-  if (micros() < event.us) {
+  if (getTime() < event.us) {
     return false;
   }
   switch(event.action) {
