@@ -25,7 +25,10 @@ IntervalTimer agrTimer;
 
 
 bool enableDataTransmission = true;
-
+bool enableADCTransmission = true;
+bool enableMagTransmission = true;
+bool enableAccTransmission = true;
+bool enableCoilTransmission = true;
 
 typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
@@ -48,7 +51,7 @@ typedef struct {
 typedef struct {
   char cmd;
   double us;
-  int data[NUM_CMD_DATA];
+  float data[NUM_CMD_DATA];
 } CommandT;
 
 
@@ -107,7 +110,7 @@ const float radian = 57.295779513082321f;
 
 /***************************************************************/
 /******************* configurations ***************************/
-float pulseDuration = 0.005; //seconds
+float pulseDuration = 0.008; //seconds
 float pulsePhase = 15; // degrees
 float hysteresis = -0.1; // volts, - indicates trigger on falling
 bool autoFire = true; //whether to auto fire
@@ -280,22 +283,22 @@ void startAGRTimer() {
 void setup() {
   // put your setup code here, to run once:
   setupPins();
-  digitalWrite(indicatorPins[0], HIGH);
   Serial.begin(9600);
-  while(!Serial) {
-    digitalWrite(indicatorPins[0], LOW);
-    delay(50);
-    digitalWrite(indicatorPins[0], HIGH);
-    delay(50);   
+  elapsedMillis serialWait;
+  int j = 0;
+  while(!Serial && serialWait < 10000) {
+    setLEDIndicators(j);
+    setLED(j);
+    j = (j+1) % 256; 
+    delay(20);
   }
+  setLEDIndicators(0);
+  setLED(255);
+  
   Wire.begin();
   setGain(0);
-//  Serial.println("hi");
-//  Serial.println(1);
   setupADC();
- // Serial.println(2);
   setupAGR();
- // Serial.println(3);
   startAGRTimer();
 
   coilTimer.begin(toggleCoil_isr);
@@ -486,19 +489,34 @@ void pollTransmit() {
     }
     avgreading.us = us / numADCToAvg;
     avgreading.val = val / numADCToAvg;
-    sendReading1(avgreading, DETVAL);
+    if (enableADCTransmission) {
+      sendReading1(avgreading, DETVAL);
+    }
     return; 
   }
   if (!magTransmitFifo.isEmpty()) {
-    sendReading3(magTransmitFifo.pop(), MAGX); 
+    if (enableMagTransmission) {
+      sendReading3(magTransmitFifo.pop(), MAGX); 
+    } else {
+      magTransmitFifo.pop();
+    }
     return;
   }
   if (!accelTransmitFifo.isEmpty()) {
-    sendReading3(accelTransmitFifo.pop(), ACCX);
+    if (enableAccTransmission) {
+      sendReading3(accelTransmitFifo.pop(), ACCX);
+    } else {
+      accelTransmitFifo.pop();
+    }
     return; 
   }
   if (!coilTransmitFifo.isEmpty()) {
-    sendReading1(coilTransmitFifo.pop(), COIL);
+    if (enableCoilTransmission) {
+      sendReading1(coilTransmitFifo.pop(), COIL);
+    } else {
+        coilTransmitFifo.pop();
+    }
+    
     return;
   }
 }
@@ -650,34 +668,28 @@ void processSerialLine() {
   for (wsoff = 0; isspace(buff[wsoff]) && wsoff < rv; ++wsoff); //get rid of leading whitespace
   CommandT c;
   c.data[0] = c.data[1] = c.data[2] = c.data[3] = 0;
-  sscanf(buff + wsoff, "%c %lu %i %i %i %i", &c.cmd, &c.us, c.data, c.data + 1, c.data + 2, c.data +3); //change if num_data_bytes changes
+  sscanf(buff + wsoff, "%c %lf %f %f %f %f", &c.cmd, &c.us, c.data, c.data + 1, c.data + 2, c.data +3); //change if num_data_bytes changes
+  c.us *= mega; //convert from seconds to microseconds
   parseCommand(c);  
 }
 
 void parseCommand (CommandT c) {
   EventT event;
-  double us;
   switch(toupper(c.cmd)) {
     case 'G':
       setGain((uint8_t) c.data[0]);
       return;
     case 'C':
       if (c.us <= getTime()) {
-        setCoil(true);
-        us = getTime();
+        setCoil(true, c.data[0]);
       } else {
         event.us = c.us;
-        us = c.us;
         event.action = SET_COIL;
         event.data[0] = 1;
         event.data[1] = c.data[0];
         addEvent(event);
       }
-//      if (c.data[0] > 0) {
-//        event.us = us + c.data[0];
-//        event.action = SET_COIL;
-//        event.data = 0;
-//      }
+
       return;
     case 'D': {
       if (c.us <= getTime()) {
@@ -693,7 +705,6 @@ void parseCommand (CommandT c) {
     case 'L':
       if (c.us <= getTime()) {
         setLED(c.data[0]);
-        us = getTime();
       } else {
         event.us = c.us;
         event.action = SET_LED;
@@ -709,6 +720,7 @@ void parseCommand (CommandT c) {
         hysteresis = c.data[2];
         sendMessage("auto enabled", 1);
       } else {
+        autoFire = false;
         sendMessage("auto disabled", 1);
       }
     }     
