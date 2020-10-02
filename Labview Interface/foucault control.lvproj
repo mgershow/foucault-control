@@ -124,7 +124,7 @@
 				<Property Name="RegDestCount" Type="Int">1</Property>
 				<Property Name="Source[0].dest" Type="Str">{AF813D56-CD50-4F37-8597-48D1AB98F45A}</Property>
 				<Property Name="Source[0].name" Type="Str">super small oscilloscope.vi</Property>
-				<Property Name="Source[0].tag" Type="Ref">/My Computer/Serial communication/super small oscilloscope.vi</Property>
+				<Property Name="Source[0].tag" Type="Ref"></Property>
 				<Property Name="Source[0].type" Type="Str">File</Property>
 				<Property Name="SourceCount" Type="Int">1</Property>
 			</Item>
@@ -155,7 +155,7 @@
 				<Property Name="Source[0].itemID" Type="Str">{91DE48D9-A66A-48C0-84E3-C0CA9F39DC45}</Property>
 				<Property Name="Source[0].type" Type="Str">Container</Property>
 				<Property Name="Source[1].destinationIndex" Type="Int">0</Property>
-				<Property Name="Source[1].itemID" Type="Ref">/My Computer/Serial communication/super small oscilloscope.vi</Property>
+				<Property Name="Source[1].itemID" Type="Ref"></Property>
 				<Property Name="Source[1].sourceInclusion" Type="Str">TopLevel</Property>
 				<Property Name="Source[1].type" Type="Str">VI</Property>
 				<Property Name="SourceCount" Type="Int">2</Property>
