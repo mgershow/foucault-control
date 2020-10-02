@@ -36,6 +36,8 @@ typedef enum {NONE, DETVAL, MAGX, MAGY, MAGZ, ACCX, ACCY, ACCZ, COIL} TransmitTy
 
 const int indicatorPins[] = {0,1,2,3,4,5,6,7};
 
+typedef enum {COIL_ON, BAD_MSG, READY_FOR_CROSSING, AUTO_ON, LED_ON, TRANSMIT_SERIAL } LedMessageTypeT;
+
 typedef struct {
   double us;
   float val;
@@ -154,6 +156,9 @@ volatile unsigned long lastmicros = 0;
 const double microrollover = 4294967295;
 /********************* hardware control **************************/
 
+void setLedMessage (LedMessageTypeT msg, bool setting) {
+  digitalWrite(indicatorPins[msg], setting);
+}
 
 void setCoil(bool activate, float duration = -1) {
   coilState = activate;
@@ -161,22 +166,16 @@ void setCoil(bool activate, float duration = -1) {
     digitalWrite(coilOffPin, !activate);
   #endif
     digitalWrite(actCoilPin, activate);
-    digitalWrite(0, activate);
+    setLedMessage(COIL_ON, activate);
     if (duration > 0) {
       coilTimer.trigger(duration*mega);
     }
 }
 
 void setLED (uint8_t level) {
-//  if (level == 0) {
-//    digitalWrite(actLEDPin, LOW);
-//    return;
-//  }
-//  if (level == 255) {
-//    digitalWrite(actLEDPin, HIGH);
-//    return;
-//  }
+
   analogWrite(actLEDPin, level);
+  analogWrite(indicatorPins[LED_ON], level);
 }
 
 
@@ -347,27 +346,14 @@ void toggleCoil_isr(void) {
 elapsedMillis loopT;
 int ctr = 0;
 void loop() {
-  //setLEDIndicators(1);
- // setLEDIndicators(3);
-
+ 
   pollADC();
   pollAGR();
   pollTransmit();
- // setLEDIndicators(4);
   pollEvent();
-  //setLEDIndicators(5);
   pollSerial();
-
   pollCoil();
-  
- // ++ctr;
-//  if (loopT >= 1000) {
-//    sendMessage("loop period = " + String(((int)loopT)/ctr), 2);
-//    loopT = loopT - 1000;
-//    ctr = 0;
-//  }
-//  pollLEDIndicators();
-
+ 
 }
 
 elapsedMillis coilTransmitT;
@@ -390,7 +376,7 @@ void pollCoil (void) {
 
 void setReadyForCrossing(bool r) {
   readyForCrossing = r;
-  digitalWrite(7, r);
+  setLedMessage(READY_FOR_CROSSING, r);
 }
 
 bool retrigger = false;
@@ -400,7 +386,7 @@ void pollADC (void) {
   }
   newDetector = false;
   analogTransmitFifo.unshift(lastReading);
-  digitalWrite(1, lastReading.val > abs(hysteresis));
+  //digitalWrite(1, lastReading.val > abs(hysteresis));
 
   bool high = false;
   bool low = false;
@@ -420,8 +406,11 @@ void pollADC (void) {
       }
     }
   }
-  digitalWrite(1,high);
-  digitalWrite(2,low);
+
+setLedMessage(AUTO_ON, autoFire);
+  
+ // digitalWrite(1,high);
+//  digitalWrite(2,low);
   if ( retrigger && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) {
     
     float dt = lastLow.us - lastHigh.us;
@@ -478,6 +467,7 @@ void pollAGR(void) {
 
 void pollTransmit() {
   if (analogTransmitFifo.size() >= numADCToAvg) {
+    setLedMessage(TRANSMIT_SERIAL, true);
     double us = 0; 
     double val = 0;
     Reading1T r;
@@ -495,6 +485,7 @@ void pollTransmit() {
     return; 
   }
   if (!magTransmitFifo.isEmpty()) {
+    setLedMessage(TRANSMIT_SERIAL, true);
     if (enableMagTransmission) {
       sendReading3(magTransmitFifo.pop(), MAGX); 
     } else {
@@ -503,6 +494,7 @@ void pollTransmit() {
     return;
   }
   if (!accelTransmitFifo.isEmpty()) {
+    setLedMessage(TRANSMIT_SERIAL, true);
     if (enableAccTransmission) {
       sendReading3(accelTransmitFifo.pop(), ACCX);
     } else {
@@ -511,6 +503,7 @@ void pollTransmit() {
     return; 
   }
   if (!coilTransmitFifo.isEmpty()) {
+    setLedMessage(TRANSMIT_SERIAL, true);
     if (enableCoilTransmission) {
       sendReading1(coilTransmitFifo.pop(), COIL);
     } else {
@@ -519,6 +512,7 @@ void pollTransmit() {
     
     return;
   }
+  setLedMessage(TRANSMIT_SERIAL, false);
 }
 
 void pollEvent() {
@@ -567,9 +561,7 @@ void setFiringAction(double us) {
   event.data[0] = 1;
   event.data[1] = pulseDuration;
   addEvent(event);
-//  event.us = event.us + pulseDuration*mega;
-//  event.data = 0;
-//  addEvent(event);
+
   event.us = event.us + (pulseDuration + retriggerDelay)*mega;
   event.action = SET_READY;
   event.data[0] = 1;
@@ -657,12 +649,14 @@ void processSerialLine() {
   int rv;
   rv = readLineSerial(buff, CHAR_BUF_SIZE, 500);
   if (rv < 0) {
-    Serial.println("line reading failed");
+    sendMessage("line reading failed",1);
+    setLedMessage(BAD_MSG, true);
     return; 
   }
   if (rv == 0) {
     return;
   }
+  setLedMessage(BAD_MSG, false);
   restarted = false; //received a command
   int wsoff = 0;
   for (wsoff = 0; isspace(buff[wsoff]) && wsoff < rv; ++wsoff); //get rid of leading whitespace
@@ -723,7 +717,10 @@ void parseCommand (CommandT c) {
         autoFire = false;
         sendMessage("auto disabled", 1);
       }
+      return;
     }     
+    default:
+      setLedMessage(BAD_MSG, true);
      
   }
 }
