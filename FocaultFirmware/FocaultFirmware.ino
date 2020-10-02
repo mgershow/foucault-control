@@ -111,7 +111,7 @@ const float radian = 57.295779513082321f;
 /***************************************************************/
 /******************* configurations ***************************/
 float pulseDuration = 0.008; //seconds
-float pulsePhase = 15; // degrees
+float pulsePhase = 18; // degrees
 float hysteresis = -0.1; // volts, - indicates trigger on falling
 bool autoFire = true; //whether to auto fire
 float retriggerDelay = 0.25; //seconds AFTER pulse delivery
