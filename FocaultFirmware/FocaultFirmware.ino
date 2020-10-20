@@ -7,6 +7,7 @@ using namespace TeensyTimerTool;
 #include <Wire.h>
 #include <ADC.h>
 #include <ADC_util.h>
+#include <EEPROM.h>
 
 #define mega 1000000.f
 #define micro 0.000001f
@@ -14,6 +15,8 @@ using namespace TeensyTimerTool;
 #define NUM_CMD_DATA 4
 #define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
+
+#define VERSION 2
 
 //#define LEGACY 
 
@@ -120,9 +123,18 @@ float retriggerDelay = 0.25; //seconds AFTER pulse delivery
 
 float vref = 1.25;
 
-int verbosity = 2;
+int verbosity = 0;
 
 unsigned int numADCToAvg = 16;
+
+const byte EEPROM_ACC_CODE = 123; //if byte at eeprom_acc_address is 123, then magnetometer data has been written
+const int EEPROM_ACC_ADDRESS = 900; //arbitrary choice
+struct {
+  float x = 0;
+  float y = 0;
+  //don't zero the z
+} accZero;
+uint8_t numEepromWrites = 0; //prevent writing eeprom more than 255 times per power cycle - avoid accidental fatigue
 
 /********************* state GLOBALS ********************************/
 
@@ -312,6 +324,32 @@ void setup() {
   
 }
 
+void readAccZeroEeprom() {
+  byte code;
+  EEPROM.get(EEPROM_ACC_ADDRESS, code);
+  if (code == EEPROM_ACC_CODE) {
+    EEPROM.get(EEPROM_ACC_ADDRESS + sizeof(byte), accZero);
+  } else {
+    accZero.x = 0;
+    accZero.y = 0;
+  }
+}
+
+void writeAccZeroEeprom() {
+  if (numEepromWrites >= 255) {
+    return;
+  }
+  numEepromWrites++;
+  byte code = EEPROM_ACC_CODE;
+  EEPROM.put(EEPROM_ACC_ADDRESS,code);
+  EEPROM.get(EEPROM_ACC_ADDRESS + sizeof(byte), accZero);
+}
+void zeroAccelerometer(float accXZero, float accYZero) {
+  accZero.x = accXZero;
+  accZero.y = accYZero;
+  writeAccZeroEeprom();
+}
+
 /**************** ISRs **********************************/
 
 
@@ -444,8 +482,8 @@ void pollAGR(void) {
 
   if (hasAcc) {
     accel.getEvent(&event);
-    reading.x = event.acceleration.x;
-    reading.y = event.acceleration.y;
+    reading.x = event.acceleration.x - accZero.x;
+    reading.y = event.acceleration.y - accZero.y;
     reading.z = event.acceleration.z;
     accelTransmitFifo.unshift(reading);
   }
@@ -596,7 +634,13 @@ void addEvent (EventT event) {
   }
 }
 
-
+//byte double float = 13 byes; expanding to double double double would be 24 bytes. 1 MB / 24 bytes = 43,690 readings
+//at 1 khz = 43 seconds
+//100 MB -> 1.5 hours...
+//can go to 2+ hrs with 13 byte alignment
+//only storing magnetometer data: could pack as double float float float = 20 bytes @ 100 Hz
+//524 seconds / MB --> 100 MB = 14.5 Hrs
+//storing magnetometer data as ms (uint) u16 u16 u16 -> 10 bytes --> 29 hours  
 void sendReading1 (Reading1T reading, TransmitTypeT t) {
   sendDataAsText ((byte) t, reading.us, reading.val);
 }
@@ -685,7 +729,7 @@ void parseCommand (CommandT c) {
       }
 
       return;
-    case 'D': {
+    case 'D': 
       if (c.us <= getTime()) {
         setCoil(false);
       } else {
@@ -717,8 +761,23 @@ void parseCommand (CommandT c) {
         autoFire = false;
         sendMessage("auto disabled", 1);
       }
+      return;        
+    case 'T':      
+      enableDataTransmission = c.data[0] > 0;
+      enableADCTransmission = ((byte) c.data[0]) & ((byte) 1);
+      enableMagTransmission = ((byte) c.data[0]) & ((byte) 2);
+      enableAccTransmission = ((byte) c.data[0]) & ((byte) 4);
+      enableCoilTransmission = ((byte) c.data[0]) & ((byte) 8);
       return;
-    }     
+    case 'V':
+      verbosity = c.data[0];
+      return;
+    case 'R':
+      Serial.println(VERSION);
+      return;
+    case 'Z':
+      zeroAccelerometer(c.data[0], c.data[1]);
+      return;
     default:
       setLedMessage(BAD_MSG, true);
      
