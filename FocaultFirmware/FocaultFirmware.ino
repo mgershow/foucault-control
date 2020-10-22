@@ -16,7 +16,7 @@ using namespace TeensyTimerTool;
 #define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
 
-#define VERSION 2
+#define VERSION 3
 
 //#define LEGACY 
 
@@ -164,7 +164,7 @@ bool restarted = true;
 OneShotTimer coilTimer(GPT1);
 
 volatile double baseTime = 0;
-volatile unsigned long lastmicros = 0;
+volatile double lasttime = 0;
 const double microrollover = 4294967295;
 /********************* hardware control **************************/
 
@@ -203,19 +203,20 @@ byte readGain() {
 }
 
 double getTime() {
-
+  double thistime;
+  bool rollover;
   noInterrupts();
-  bool rollover = micros() < lastmicros;
-  if (rollover) {
+  thistime = micros() + baseTime;
+  if (rollover = (thistime < lasttime)) { //intentional use of assignment = 
     baseTime += microrollover;
+    thistime += microrollover;
   }
-  lastmicros = micros();
+  lasttime = thistime;
   interrupts();
   if (rollover) {
     sendMessage("micros rollover", 1);
   }
-
-  return baseTime + lastmicros;
+  return thistime;
 }
 
 /*************** setup *************************************/
