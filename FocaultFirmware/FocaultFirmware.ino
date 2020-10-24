@@ -132,7 +132,6 @@ const int EEPROM_ACC_ADDRESS = 900; //arbitrary choice
 struct {
   float x = 0;
   float y = 0;
-  //don't zero the z
 } accZero;
 uint8_t numEepromWrites = 0; //prevent writing eeprom more than 255 times per power cycle - avoid accidental fatigue
 
@@ -334,6 +333,8 @@ void readAccZeroEeprom() {
     accZero.x = 0;
     accZero.y = 0;
   }
+  sendMessage("Accelerometer zero set to " + String(accZero.x) + ", " +  String(accZero.y), 1);
+
 }
 
 void writeAccZeroEeprom() {
@@ -343,12 +344,17 @@ void writeAccZeroEeprom() {
   numEepromWrites++;
   byte code = EEPROM_ACC_CODE;
   EEPROM.put(EEPROM_ACC_ADDRESS,code);
-  EEPROM.get(EEPROM_ACC_ADDRESS + sizeof(byte), accZero);
+  EEPROM.put(EEPROM_ACC_ADDRESS + sizeof(byte), accZero);
 }
 void zeroAccelerometer(float accXZero, float accYZero) {
   accZero.x = accXZero;
   accZero.y = accYZero;
+//   sendMessage("Accelerometer zero set to " + String(accZero.x) + ", " +  String(accZero.y), 1);
+  
   writeAccZeroEeprom();
+   sendMessage("Accelerometer zero set to " + String(accZero.x) + ", " +  String(accZero.y), 1);
+//    sendMessage("Accelerometer zero set to " + String(accXZero) + ", " +  String(accYZero), 1);
+
 }
 
 /**************** ISRs **********************************/
@@ -778,7 +784,7 @@ void parseCommand (CommandT c) {
       return;
     case 'Z':
       zeroAccelerometer(c.data[0], c.data[1]);
-      return;
+     return;
     default:
       setLedMessage(BAD_MSG, true);
      
