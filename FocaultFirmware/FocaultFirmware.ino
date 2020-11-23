@@ -16,7 +16,7 @@ using namespace TeensyTimerTool;
 #define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
 
-#define VERSION 3
+#define VERSION 4
 
 //#define LEGACY 
 
@@ -32,6 +32,8 @@ bool enableADCTransmission = true;
 bool enableMagTransmission = true;
 bool enableAccTransmission = true;
 bool enableCoilTransmission = true;
+
+bool autoFlash = true;
 
 typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
@@ -184,7 +186,6 @@ void setCoil(bool activate, float duration = -1) {
 }
 
 void setLED (uint8_t level) {
-
   analogWrite(actLEDPin, level);
   analogWrite(indicatorPins[LED_ON], level);
 }
@@ -607,6 +608,16 @@ void setFiringAction(double us) {
   event.data[1] = pulseDuration;
   addEvent(event);
 
+  if (autoFlash) {
+    event.us = us + 1; // 1 microsecond later
+    event.data[0] = 255;
+    event.action = SET_LED;
+    addEvent(event);
+    event.us = us + pulseDuration*mega + 1;
+    event.data[0] = 0;
+    addEvent(event);
+  }
+
   event.us = event.us + (pulseDuration + retriggerDelay)*mega;
   event.action = SET_READY;
   event.data[0] = 1;
@@ -785,6 +796,9 @@ void parseCommand (CommandT c) {
     case 'Z':
       zeroAccelerometer(c.data[0], c.data[1]);
      return;
+    case 'F':
+      autoFlash = c.data[0];
+      return;
     default:
       setLedMessage(BAD_MSG, true);
      
