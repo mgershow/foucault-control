@@ -39,7 +39,7 @@ typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
 typedef enum {NONE, DETVAL, MAGX, MAGY, MAGZ, ACCX, ACCY, ACCZ, COIL} TransmitTypeT;
 
-const int indicatorPins[] = {0,1,2,3,4,5,6,7};
+const int indicatorPins[] = {0,0,0,0,0,0,0,0}; //pin 0 is not conected - there are no indicators on this board
 
 typedef enum {COIL_ON, BAD_MSG, READY_FOR_CROSSING, AUTO_ON, LED_ON, TRANSMIT_SERIAL } LedMessageTypeT;
 
@@ -96,20 +96,16 @@ CircularBuffer<EventT, 1000> scratchEventStack;
 
 
 /**************** PIN CONFIGURATIONS  ***************************/
+/********** REVISED FOR 2021 BOARD *****************************/
 
-#ifdef LEGACY
-  const int coilOffPin = 23;
-  const int actCoilPin = 22; //coil control pin, sets current level
-  const int actLEDPin = 3;
-#else
-  const int actCoilPin = 23;
-  const int actLEDPin = 22;
-#endif
+const int actCoilPin = 7;
+const int actLEDPin = 8;
+const int gainSet0 = 2;
+const int gainSet1 = 3;
 
-const int cat5171Addr = 44;
 
-const int detectorPin = A1;
-const int refPin = A0;
+const int detectorPin = A0;
+const int refPin = A1;
 
 
 const float slopeMult = 50.35f; 
@@ -167,6 +163,8 @@ OneShotTimer coilTimer(GPT1);
 volatile double baseTime = 0;
 volatile double lasttime = 0;
 const double microrollover = 4294967295;
+
+byte currentGain;
 /********************* hardware control **************************/
 
 void setLedMessage (LedMessageTypeT msg, bool setting) {
@@ -175,9 +173,6 @@ void setLedMessage (LedMessageTypeT msg, bool setting) {
 
 void setCoil(bool activate, float duration = -1) {
   coilState = activate;
-  #ifdef LEGACY
-    digitalWrite(coilOffPin, !activate);
-  #endif
     digitalWrite(actCoilPin, activate);
     setLedMessage(COIL_ON, activate);
     if (duration > 0) {
@@ -192,14 +187,12 @@ void setLED (uint8_t level) {
 
 
 void setGain(byte g) {
-  Wire.beginTransmission(cat5171Addr);
-  Wire.write(byte(0));
-  Wire.write(g);
-  Wire.endTransmission();
+  digitalWrite(gainSet0, bitRead(g, 0));
+  digitalWrite(gainSet1, bitRead(g, 1));
+  currentGain = g;
 }
 byte readGain() {
-  Wire.requestFrom(cat5171Addr,1,true);
-  return Wire.read();
+  return currentGain;
 }
 
 double getTime() {
@@ -222,16 +215,14 @@ double getTime() {
 /*************** setup *************************************/
 
 void setupPins() {
-  #ifdef LEGACY
-   pinMode(coilOffPin, OUTPUT);
-   pinMode (actCoilPin, OUTPUT);
-   pinMode (actLEDPin, OUTPUT);
-  #endif
+
   pinMode(detectorPin, INPUT);
   pinMode(refPin, INPUT);
   for (int j = 0; j < 8; ++j) {
     pinMode(indicatorPins[j], OUTPUT);
   }
+  pinMode(gainSet0, OUTPUT);
+  pinMode(gainSet1, OUTPUT);
 }
 
 void setupADC() {
@@ -270,14 +261,14 @@ void setupAGR() {
 
   //Serial.println("a");
   if (!hasAcc) {
-    hasAcc = accel.begin();
+    hasAcc = accel.begin(0, &Wire1);
     accel.setRange(LSM303_RANGE_2G);
     accel.setMode(LSM303_MODE_HIGH_RESOLUTION);
   }
  // Serial.println("b");
   if (!hasMag) {
     lis2mdl.enableAutoRange(true);
-    hasMag = lis2mdl.begin();  
+    hasMag = lis2mdl.begin(1,&Wire1);  
     if (hasMag) {
       lis2mdl.setDataRate(lis2mdl_rate_t::LIS2MDL_RATE_100_HZ);
     }
@@ -307,7 +298,7 @@ void setup() {
   setLEDIndicators(0);
   setLED(255);
   
-  Wire.begin();
+  Wire1.begin();
   setGain(0);
   setupADC();
   setupAGR();
@@ -432,7 +423,6 @@ void pollADC (void) {
   }
   newDetector = false;
   analogTransmitFifo.unshift(lastReading);
-  //digitalWrite(1, lastReading.val > abs(hysteresis));
 
   bool high = false;
   bool low = false;
@@ -453,10 +443,8 @@ void pollADC (void) {
     }
   }
 
-setLedMessage(AUTO_ON, autoFire);
+  setLedMessage(AUTO_ON, autoFire);
   
- // digitalWrite(1,high);
-//  digitalWrite(2,low);
   if ( retrigger && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) {
     
     float dt = lastLow.us - lastHigh.us;
