@@ -216,6 +216,10 @@ double getTime() {
 
 void setupPins() {
 
+  //enable pullups for i2c - these should be present on board, but are missing in prototype design
+  pinMode(16, INPUT_PULLUP);
+  pinMode(17, INPUT_PULLUP); 
+
   pinMode(detectorPin, INPUT);
   pinMode(refPin, INPUT);
   for (int j = 0; j < 8; ++j) {
@@ -261,14 +265,14 @@ void setupAGR() {
 
   //Serial.println("a");
   if (!hasAcc) {
-    hasAcc = accel.begin(0, &Wire1);
+    hasAcc = accel.begin(0x19, &Wire1);
     accel.setRange(LSM303_RANGE_2G);
     accel.setMode(LSM303_MODE_HIGH_RESOLUTION);
   }
  // Serial.println("b");
   if (!hasMag) {
     lis2mdl.enableAutoRange(true);
-    hasMag = lis2mdl.begin(1,&Wire1);  
+    hasMag = lis2mdl.begin(0x1E,&Wire1);  
     if (hasMag) {
       lis2mdl.setDataRate(lis2mdl_rate_t::LIS2MDL_RATE_100_HZ);
     }
