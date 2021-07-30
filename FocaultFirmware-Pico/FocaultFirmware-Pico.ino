@@ -7,8 +7,8 @@
 #include <Adafruit_LSM303_Accel.h>
 #include <Wire.h>
 #include <EEPROM.h>
-#include <EllapsedMillis.h>
-
+#include <elapsedMillis.h>
+#include "pico/multicore.h"
 
 #define mega 1000000.f
 #define micro 0.000001f
@@ -22,7 +22,7 @@
 
 Adafruit_LIS2MDL lis2mdl = Adafruit_LIS2MDL(1);
 Adafruit_LSM303_Accel_Unified accel = Adafruit_LSM303_Accel_Unified(54321);
-ADC *adc = new ADC(); // adc object
+
 
 bool enableDataTransmission = true;
 bool enableADCTransmission = true;
@@ -107,8 +107,8 @@ const int coil_alarm_num = 1;
 
 const float slopeMult = 50.35f;
 const float radian = 57.295779513082321f;
-
-const uint_32 agrPeriod = 10000; //us = 100 Hz
+ 
+const uint32_t agrPeriod = 10000; //us = 100 Hz
 
 /***************************************************************/
 /******************* configurations ***************************/
@@ -121,8 +121,8 @@ float retriggerDelay = 0.25; //seconds AFTER pulse delivery
 float vref = 1.25;
 
 int verbosity = 0;
-
-unsigned int numADCToAvg = 16;
+const uint8_t numADCToAvg = 64; //rate = 500kHz / 3 / numavgs --> 32 = 5 kHz; 64 = 2.5 kHz 
+const float vscaler = 3.3 / (4096 * numADCToAvg); // vref / 4096 * numADCToAvg -- 4096 = 3.3 V; 256 summed readings
 
 const byte EEPROM_ACC_CODE = 123; //if byte at eeprom_acc_address is 123, then magnetometer data has been written
 const int EEPROM_ACC_ADDRESS = 900; //arbitrary choice
@@ -134,12 +134,12 @@ uint8_t numEepromWrites = 0; //prevent writing eeprom more than 255 times per po
 
 /********************* state GLOBALS ********************************/
 
-volatile bool newDetector;
 
 
 Reading1T lastHigh;
 Reading1T lastLow;
 Reading1T lastReading;
+Reading1T coilReading;
 
 volatile bool readyForCrossing = true;
 
@@ -160,34 +160,73 @@ byte currentGain;
 
 /*********************** core1 analog read ***********************/
 
+uint32_t getLow(uint64_t val) {
+  return * ((uint32_t *) &val);
+}
+
+uint32_t getHigh(uint64_t val) {
+  return * (((uint32_t *) (&val))+1);
+}
+
+void splitIntoTwo(uint64_t val, uint32_t *low, uint32_t *high) {
+    if (low != NULL) {
+      *low = * ((uint32_t *) &val);
+    }
+    if (high != NULL) { 
+      *high = * (((uint32_t *) (&val))+1);
+    }
+}
+
+uint64_t combineIntoOne (uint32_t low, uint32_t high) {
+  uint64_t val;
+  * ((uint32_t *) &val) = low;
+  * (((uint32_t *) (&val))+1) = high;
+  return val;
+}
+
+uint64_t setLowerHalf (uint64_t val, uint32_t newlow) {
+  * ((uint32_t *) &val) = newlow;
+  return val;
+}
 
 void analogReadFunctionCore1 (void) {
   static uint32_t vdetaccum = 0;
   static uint32_t vrefaccum = 0;
   static uint32_t vcurraccum = 0;
   static uint32_t microtime;
-  static unsigned char numreads = 0;
+  static uint8_t numreads = 0;
   ++numreads;
-  if (numreads == 128) {
-    microtime = micros();
+  if (numreads == numADCToAvg >> 1) {
+    microtime = getLow(getTime());
   }
   vdetaccum += analogRead(detectorPin);
   vrefaccum += analogRead(refPin);
   vcurraccum += analogRead(coilIPin);
-  if (numreads == 0) {
-    fifo.push(microtime);
-    fifo.push(vdetaccum);
-    fifo.push(vrefaccum);
-    fifo.push(vcurraccum);
+  if (numreads == numADCToAvg) {
+    rp2040.fifo.push(microtime);
+    rp2040.fifo.push(vdetaccum);
+    rp2040.fifo.push(vrefaccum);
+    rp2040.fifo.push(vcurraccum);
+    numreads = 0;
   }
 }
 
 void setup1 (void) {
   pinMode(detectorPin, INPUT);
   pinMode(refPin, INPUT);
-  pinMode(coildPin, INPUT);
-  analogReadResolution(12);
+  pinMode(coilIPin, INPUT);
 }
+
+void loop1(void) {
+  uint64_t t = getTime();
+  if (bitRead(t, 0)) { // only read on odd microseconds -- maximum 500 kHz
+    analogReadFunctionCore1();
+    while (getTime() == t) {
+        ; // blank - wait for at least one microsecond to pass
+    }
+  }
+}
+
 /********************  core0 all others ********************************/
 
 
@@ -234,9 +273,9 @@ void setCoil(bool activate, float duration = -1) {
   coilState = activate;
   digitalWrite(actCoilPin, activate);
   if (duration > 0) {
-     hardware_alarm_set_target(alarm_num, make_timeout_time_us(duration * mega));
+     hardware_alarm_set_target(coil_alarm_num, make_timeout_time_us(duration * mega));
   }
-  if (autoflash) {
+  if (autoFlash) {
     setLED(coilState ? 255 : 0);
   }
 }
@@ -363,29 +402,25 @@ void loop() {
   pollTransmit();
   pollEvent();
   pollSerial();
-  pollCoil();
 
 }
 
-elapsedMillis coilTransmitT;
-Reading1T coilReading;
-
-//redo now that we have a current reading!
-void pollCoil (void) {
-  bool trans = !coilReading.val != !coilState;
-  if (trans) {
-    coilTransmitFifo.unshift(coilReading);
-  }
-  coilReading.us = getTime();
-  coilReading.val = coilState;
-  if (trans || coilTransmitT > 100) {
-    coilTransmitFifo.unshift(coilReading);
-    if (coilTransmitT > 100) {
-      coilTransmitT = coilTransmitT - 100;
-    }
-  }
-
-}
+//now handled in ADC loop
+//void pollCoil (void) {
+//  bool trans = !coilReading.val != !coilState;
+//  if (trans) {
+//    coilTransmitFifo.unshift(coilReading);
+//  }
+//  coilReading.us = getTime();
+//  coilReading.val = coilState;
+//  if (trans || coilTransmitT > 100) {
+//    coilTransmitFifo.unshift(coilReading);
+//    if (coilTransmitT > 100) {
+//      coilTransmitT = coilTransmitT - 100;
+//    }
+//  }
+//
+//}
 
 void setReadyForCrossing(bool r) {
   readyForCrossing = r;
@@ -394,17 +429,27 @@ void setReadyForCrossing(bool r) {
 bool retrigger = false;
 
 bool newDetector() {
-  
+  if (rp2040.fifo.available() < 4) {
+    return false;
+  }
+  uint64_t us = setLowerHalf(getTime(), rp2040.fifo.pop());
+  float det = vscaler*rp2040.fifo.pop();
+  float ref = vscaler*rp2040.fifo.pop();
+  float coilAmps = vscaler*rp2040.fifo.pop()/1.1; //1.1 V = 1 amp
+  lastReading.us = us;
+  lastReading.val = det - ref;
+  coilReading.us = us;
+  coilReading.val = coilAmps;
+  return true;
 }
 
 void pollADC (void) {
 
-  if (!newDetector) {
+  if (!newDetector()) {
     return;
   }
-  newDetector = false;
   analogTransmitFifo.unshift(lastReading);
-
+  coilTransmitFifo.unshift(coilReading);
   bool high = false;
   bool low = false;
   if (readyForCrossing && abs(lastReading.val) > abs(hysteresis)) {
@@ -476,12 +521,10 @@ bool newAGR(void) {
   
 }
 
-elapsedMillis agrT;
 void pollAGR(void) {
   if (!newAGR()) {
     return;
   }
-  newAGR = false;
   Reading3T reading;
   reading.us = getTime();
   sensors_event_t event;
@@ -505,24 +548,34 @@ void pollAGR(void) {
 }
 
 void pollTransmit() {
-  if (analogTransmitFifo.size() >= numADCToAvg) {
-    setLedMessage(TRANSMIT_SERIAL, true);
-    double us = 0;
-    double val = 0;
-    Reading1T r;
-    Reading1T avgreading;
-    for (unsigned int j = 0; j < numADCToAvg; ++j) {
-      r = analogTransmitFifo.pop();
-      us += r.us;
-      val += r.val;
+    if (!analogTransmitFifo.isEmpty()) {
+      setLedMessage(TRANSMIT_SERIAL, true);
+      if (enableADCTransmission) {
+        sendReading1(coilTransmitFifo.pop(), COIL);
+      } else {
+        coilTransmitFifo.pop();
+      }
+  
+      return;
     }
-    avgreading.us = us / numADCToAvg;
-    avgreading.val = val / numADCToAvg;
-    if (enableADCTransmission) {
-      sendReading1(avgreading, DETVAL);
-    }
-    return;
-  }
+//  if (analogTransmitFifo.size() >= numADCToAvg) {
+//    setLedMessage(TRANSMIT_SERIAL, true);
+//    double us = 0;
+//    double val = 0;
+//    Reading1T r;
+//    Reading1T avgreading;
+//    for (unsigned int j = 0; j < numADCToAvg; ++j) {
+//      r = analogTransmitFifo.pop();
+//      us += r.us;
+//      val += r.val;
+//    }
+//    avgreading.us = us / numADCToAvg;
+//    avgreading.val = val / numADCToAvg;
+//    if (enableADCTransmission) {
+//      sendReading1(avgreading, DETVAL);
+//    }
+//    return;
+//  }
   if (!magTransmitFifo.isEmpty()) {
     setLedMessage(TRANSMIT_SERIAL, true);
     if (enableMagTransmission) {
@@ -560,8 +613,6 @@ void pollEvent() {
   }
 }
 
-elapsedMillis ledT;
-
 
 void pollSerial() {
   processSerialLine();
@@ -578,16 +629,6 @@ void setFiringAction(double us) {
   event.data[0] = 1;
   event.data[1] = pulseDuration;
   addEvent(event);
-
-//  if (autoFlash) {
-//    event.us = us + 1; // 1 microsecond later
-//    event.data[0] = 255;
-//    event.action = SET_LED;
-//    addEvent(event);
-//    event.us = us + pulseDuration * mega + 1;
-//    event.data[0] = 0;
-//    addEvent(event);
-//  }
 
   event.us = event.us + (pulseDuration + retriggerDelay) * mega;
   event.action = SET_READY;
