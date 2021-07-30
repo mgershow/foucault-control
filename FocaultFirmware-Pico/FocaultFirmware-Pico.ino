@@ -6,9 +6,9 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_LSM303_Accel.h>
 #include <Wire.h>
-//#include <ADC.h>
-//#include <ADC_util.h>
 #include <EEPROM.h>
+#include <EllapsedMillis.h>
+
 
 #define mega 1000000.f
 #define micro 0.000001f
@@ -24,9 +24,6 @@ Adafruit_LIS2MDL lis2mdl = Adafruit_LIS2MDL(1);
 Adafruit_LSM303_Accel_Unified accel = Adafruit_LSM303_Accel_Unified(54321);
 ADC *adc = new ADC(); // adc object
 
-IntervalTimer agrTimer;
-
-
 bool enableDataTransmission = true;
 bool enableADCTransmission = true;
 bool enableMagTransmission = true;
@@ -39,16 +36,15 @@ typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
 typedef enum {NONE, DETVAL, MAGX, MAGY, MAGZ, ACCX, ACCY, ACCZ, COIL} TransmitTypeT;
 
-
 typedef enum {COIL_ON, BAD_MSG, READY_FOR_CROSSING, AUTO_ON, LED_ON, TRANSMIT_SERIAL } LedMessageTypeT;
 
 typedef struct {
-  double us;
+  uint64_t us;
   float val;
 } Reading1T;
 
 typedef struct {
-  double us;
+  uint64_t us;
   float x;
   float y;
   float z;
@@ -62,7 +58,7 @@ typedef struct {
 
 
 typedef struct {
-  double us;
+  uint64_t us;
   float slope;
   // float xmag;
   // float ymag;
@@ -70,19 +66,16 @@ typedef struct {
 
 
 typedef struct {
-  double us;
+  uint64_t us;
   ActionT action;
   float data[NUM_ACT_DATA];
 } EventT;
 
-//on teensy LC with 32 averages and everything at VERY_LOW_SPEED, sampling rate is 2 kHz; 200 samples = 100 ms; 20 samples = 10 ms
 
 CircularBuffer<Reading1T, 1000> analogTransmitFifo;
-//using index_t = decltype(analogBuffer)::index_t;
 
 CircularBuffer<Reading1T, 1000> coilTransmitFifo;
 
-//100 Hz, 10 = 100 ms
 CircularBuffer<Reading3T, 100> magTransmitFifo;
 
 CircularBuffer<Reading3T, 100> accelTransmitFifo;
@@ -109,9 +102,13 @@ const int detectorPin = 28;
 const int refPin = 27;
 const int coilIPin = 26;
 
+const int coil_alarm_num = 1;
+
 
 const float slopeMult = 50.35f;
 const float radian = 57.295779513082321f;
+
+const uint_32 agrPeriod = 10000; //us = 100 Hz
 
 /***************************************************************/
 /******************* configurations ***************************/
@@ -138,7 +135,6 @@ uint8_t numEepromWrites = 0; //prevent writing eeprom more than 255 times per po
 /********************* state GLOBALS ********************************/
 
 volatile bool newDetector;
-volatile bool newAGR;
 
 
 Reading1T lastHigh;
@@ -159,14 +155,8 @@ crossingT lastCrossing;
 
 bool restarted = true;
 
-
-OneShotTimer coilTimer(GPT1);
-
-volatile double baseTime = 0;
-volatile double lasttime = 0;
-const double microrollover = 4294967295;
-
 byte currentGain;
+
 
 /*********************** core1 analog read ***********************/
 
@@ -198,7 +188,42 @@ void setup1 (void) {
   pinMode(coildPin, INPUT);
   analogReadResolution(12);
 }
+/********************  core0 all others ********************************/
 
+
+
+void setup() {
+  // put your setup code here, to run once:
+  setupPins();
+  Serial.begin(9600);
+  elapsedMillis serialWait;
+  int j = 0;
+
+  setLED(255);
+
+  Wire1.setSDA(sda1Pin);
+  Wire1.setSCL(scl1Pin);
+  Wire1.begin();
+  setGain(0);
+  setupAGR();
+
+  if (hardware_alarm_is_claimed(coil_alarm_num)) {
+    sendMessage("hardware coil alarm is claimed!!!!", 0);
+    assert(false);
+  }else {
+    hardware_alarm_claim(coil_alarm_num);
+    hardware_alarm_set_callback(coil_alarm_num, toggleCoil_isr);
+  }
+
+  sendMessage("setup complete", 1);
+  byte g = readGain();
+  sendMessage("gain = " + String(g), 1);
+
+  if (enableDataTransmission) {
+    verbosity = -1;
+  }
+
+}
 
 
 /********************* hardware control **************************/
@@ -218,8 +243,7 @@ void setCoil(bool activate, float duration = -1) {
 
 void setLED (uint8_t level) {
   analogWrite(actLEDPin, level);
-  analogWrite(indicatorPins[LED_ON], level);
-}
+ }
 
 
 void setGain(byte g) {
@@ -227,25 +251,19 @@ void setGain(byte g) {
   digitalWrite(gainSet1, bitRead(g, 1));
   currentGain = g;
 }
+
 byte readGain() {
   return currentGain;
 }
 
-double getTime() {
-  double thistime;
-  bool rollover;
-  noInterrupts();
-  thistime = micros() + baseTime;
-  if (rollover = (thistime < lasttime)) { //intentional use of assignment =
-    baseTime += microrollover;
-    thistime += microrollover;
-  }
-  lasttime = thistime;
-  interrupts();
-  if (rollover) {
-    sendMessage("micros rollover", 1);
-  }
-  return thistime;
+uint64_t getTime() {
+  return  time_us_64 (); 
+
+}
+
+void setLedMessage (LedMessageTypeT msg, bool setting) {
+  return; //no leds on current board
+  //digitalWrite(indicatorPins[msg], setting);
 }
 
 /*************** setup *************************************/
@@ -263,31 +281,6 @@ void setupPins() {
   pinMode(gainSet1, OUTPUT);
 }
 
-//void setupADC() {
-//  ADC_CONVERSION_SPEED cs = ADC_CONVERSION_SPEED::VERY_LOW_SPEED;
-//  ADC_SAMPLING_SPEED ss = ADC_SAMPLING_SPEED::VERY_LOW_SPEED;
-//  uint8_t numavgs = 32;
-//  uint8_t res = 16;
-//
-//  adc->adc0->setReference(ADC_REFERENCE::REF_3V3);
-//  adc->adc0->setAveraging(numavgs); // set number of averages
-//  adc->adc0->setResolution(res); // set bits of resolution
-//  adc->adc0->setConversionSpeed(cs); // change the conversion speed
-//  adc->adc0->setSamplingSpeed(ss); // change the sampling speed
-//#ifdef ADC_DUAL_ADCS
-//  adc->adc1->setReference(ADC_REFERENCE::REF_3V3);
-//  adc->adc1->setAveraging(numavgs); // set number of averages
-//  adc->adc1->setResolution(res); // set bits of resolution
-//  adc->adc1->setConversionSpeed(cs); // change the conversion speed
-//  adc->adc1->setSamplingSpeed(ss); // change the sampling speed
-//  adc->startSynchronizedContinuous(detectorPin, refPin);
-//  adc->adc0->enableInterrupts(sync_isr);
-//#else
-//  vref = 3.3 / adc->adc0->getMaxValue() * ((uint16_t) adc->adc0->analogRead(refPin));
-//  adc->adc0->enableInterrupts(adc0_isr);
-//  adc->adc0->startContinuous(detectorPin);
-//#endif
-//}
 
 void setupAGR() {
   //accelerometer initializes to 100 Hz reading rate
@@ -297,13 +290,12 @@ void setupAGR() {
   // Enable the accelerometer (100Hz)
   // ctrl1.write(0x57);
 
-  //Serial.println("a");
   if (!hasAcc) {
     hasAcc = accel.begin(0x19, &Wire1);
     accel.setRange(LSM303_RANGE_2G);
     accel.setMode(LSM303_MODE_HIGH_RESOLUTION);
   }
-  // Serial.println("b");
+
   if (!hasMag) {
     lis2mdl.enableAutoRange(true);
     hasMag = lis2mdl.begin(0x1E, &Wire1);
@@ -311,51 +303,12 @@ void setupAGR() {
       lis2mdl.setDataRate(lis2mdl_rate_t::LIS2MDL_RATE_100_HZ);
     }
   }
-  // Serial.println("c");
-}
-
-void startAGRTimer() {
-  agrTimer.priority(255);
-  agrTimer.begin(agr_isr, 10000); //magnetometer updates at 100 Hz, T = 10^4 us
 }
 
 
-  const int coil_alarm_num = 1;
 
 
-void setup() {
-  // put your setup code here, to run once:
-  setupPins();
-  Serial.begin(9600);
-  elapsedMillis serialWait;
-  int j = 0;
-
-  setLED(255);
-
-  Wire1.setSDA(sda1Pin);
-  Wire1.setSCL(scl1Pin);
-  Wire1.begin();
-  setGain(0);
-  setupADC();
-  setupAGR();
-  startAGRTimer();
-
-  if (hardware_alarm_is_claimed(coil_alarm_num)) {
-    sendMessage("hardware coil alarm is claimed!!!!", 0);
-  }else {
-    hardware_alarm_claim(coil_alarm_num);
-    hardware_alarm_set_callback(coil_alarm_num, toggleCoil_isr);
-  }
-
-  sendMessage("setup complete", 1);
-  byte g = readGain();
-  sendMessage("gain = " + String(g), 1);
-
-  if (enableDataTransmission) {
-    verbosity = -1;
-  }
-
-}
+ 
 
 
 void readAccZeroEeprom() {
@@ -394,32 +347,6 @@ void zeroAccelerometer(float accXZero, float accYZero) {
 
 /**************** ISRs **********************************/
 
-//
-//void adc0_isr(void) {
-//  lastReading.us = getTime();
-//  lastReading.val = 3.3 / adc->adc0->getMaxValue() * ((uint16_t) adc->adc0->analogReadContinuous()) - vref;
-//  newDetector = true;
-//}
-//
-//void sync_isr(void) {
-//#ifdef ADC_DUAL_ADCS
-//  lastReading.us = getTime();
-//  ADC::Sync_result result = adc->readSynchronizedContinuous();
-//  lastReading.val = 3.3 / adc->adc0->getMaxValue() * (result.result_adc0 - result.result_adc1);
-//  newDetector = true;
-//#else
-//  adc0_isr();
-//#endif
-//
-//}
-void adc_isr(void) {
-  lastReading.val = 3.3 / adc->adc0->getMaxValue() * (result.result_adc0 - result.result_adc1);
-}
-
-
-void agr_isr(void) {
-  newAGR = true;
-}
 
 void toggleCoil_isr(uint alarm_num) {
   setCoil(!coilState, -1);
@@ -442,6 +369,8 @@ void loop() {
 
 elapsedMillis coilTransmitT;
 Reading1T coilReading;
+
+//redo now that we have a current reading!
 void pollCoil (void) {
   bool trans = !coilReading.val != !coilState;
   if (trans) {
@@ -460,11 +389,16 @@ void pollCoil (void) {
 
 void setReadyForCrossing(bool r) {
   readyForCrossing = r;
-  setLedMessage(READY_FOR_CROSSING, r);
 }
 
 bool retrigger = false;
+
+bool newDetector() {
+  
+}
+
 void pollADC (void) {
+
   if (!newDetector) {
     return;
   }
@@ -513,9 +447,38 @@ void pollADC (void) {
 
 }
 
+/*
+ * static int64_t absolute_time_diff_us ( absolute_time_t   from,
+absolute_time_t   to 
+) 
+(positive if to is after from except in case of overflow)
+ */
+bool timePassed (absolute_time_t targetTime) {
+  return absolute_time_diff_us(get_absolute_time(), targetTime) <= 0;
+}
+
+bool timePassed (uint64_t targetTime) {
+  absolute_time_t t;
+  update_us_since_boot(&t, targetTime);
+  return timePassed(t);
+}
+
+
+bool newAGR(void) {
+  static absolute_time_t nextReading = make_timeout_time_us(agrPeriod);
+  if (!timePassed(nextReading)) {
+    return false;
+  }
+  while (timePassed(nextReading)) {
+    nextReading = delayed_by_us(nextReading, agrPeriod);
+  }
+  return true;
+  
+}
+
 elapsedMillis agrT;
 void pollAGR(void) {
-  if (!newAGR) {
+  if (!newAGR()) {
     return;
   }
   newAGR = false;
@@ -538,11 +501,6 @@ void pollAGR(void) {
     reading.z = event.magnetic.z;
     magTransmitFifo.unshift(reading);
   }
-
-  //  if (!hasMag || !hasAcc && agrT > 1000) {
-  //    agrT = agrT - 1000;
-  //    setupAGR();
-  //  }
 
 }
 
