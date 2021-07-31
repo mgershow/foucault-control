@@ -1,5 +1,3 @@
- 
-#include <stdio.h>
 #include "pico/stdlib.h"
 #include <CircularBuffer.h>
 #include <Adafruit_LIS2MDL.h>
@@ -9,6 +7,7 @@
 #include <EEPROM.h>
 #include <elapsedMillis.h>
 #include "pico/multicore.h"
+#include "hardware/adc.h"
 
 #define mega 1000000.f
 #define micro 0.000001f
@@ -96,11 +95,11 @@ const int gainSet0 = 6;
 const int gainSet1 = 7;
 
 const int scl1Pin = 15;
-const int sda1Pin = 19;
+const int sda1Pin = 14;
 
-const int detectorPin = 28;
-const int refPin = 27;
-const int coilIPin = 26;
+const int detectorPin = A2;
+const int refPin = A1;
+const int coilIPin = A0;
 
 const int coil_alarm_num = 1;
 
@@ -120,9 +119,10 @@ float retriggerDelay = 0.25; //seconds AFTER pulse delivery
 
 float vref = 1.25;
 
-int verbosity = 0;
-const uint8_t numADCToAvg = 64; //rate = 500kHz / 3 / numavgs --> 32 = 5 kHz; 64 = 2.5 kHz 
-const float vscaler = 3.3 / (4096 * numADCToAvg); // vref / 4096 * numADCToAvg -- 4096 = 3.3 V; 256 summed readings
+int verbosity = 100;
+
+const uint16_t numADCToAvg = 400; //rate = 500kHz / 3 / numavgs --> 32 = 5 kHz; 64 = 2.5 kHz  -- in practice rate = 100 / numavgs due to overhead [1 khz = too fast for serial transmission]
+const float vscaler = 3.3 / (4096.0 * (float) numADCToAvg); // vref / 4096 * numADCToAvg -- 4096 = 3.3 V; 256 summed readings
 
 const byte EEPROM_ACC_CODE = 123; //if byte at eeprom_acc_address is 123, then magnetometer data has been written
 const int EEPROM_ACC_ADDRESS = 900; //arbitrary choice
@@ -190,41 +190,65 @@ uint64_t setLowerHalf (uint64_t val, uint32_t newlow) {
 }
 
 void analogReadFunctionCore1 (void) {
+
+  /*     analogReadInternals
+   * 
+   *     adc_gpio_init(pin);
+   *     adc_select_input(pin - A0);
+   *     return adc_read();
+   */
   static uint32_t vdetaccum = 0;
   static uint32_t vrefaccum = 0;
   static uint32_t vcurraccum = 0;
   static uint32_t microtime;
-  static uint8_t numreads = 0;
+  static uint16_t numreads = 0;
   ++numreads;
   if (numreads == numADCToAvg >> 1) {
     microtime = getLow(getTime());
   }
-  vdetaccum += analogRead(detectorPin);
-  vrefaccum += analogRead(refPin);
-  vcurraccum += analogRead(coilIPin);
+  adc_select_input(detectorPin - A0);
+  vdetaccum += adc_read();
+  adc_select_input(refPin - A0);
+  vrefaccum += adc_read();
+  adc_select_input(coilIPin - A0);
+  vcurraccum += adc_read();
+
+  
+//  vdetaccum += analogRead(detectorPin);
+//  vrefaccum += analogRead(refPin);
+//  vcurraccum += analogRead(coilIPin);
   if (numreads == numADCToAvg) {
     rp2040.fifo.push(microtime);
     rp2040.fifo.push(vdetaccum);
     rp2040.fifo.push(vrefaccum);
     rp2040.fifo.push(vcurraccum);
+
+    vdetaccum = 0;
+    vrefaccum = 0;
+    vcurraccum = 0;
     numreads = 0;
   }
 }
-
+//
 void setup1 (void) {
-  pinMode(detectorPin, INPUT);
-  pinMode(refPin, INPUT);
-  pinMode(coilIPin, INPUT);
+
+  delay(5000);
+  adc_init();
+  adc_gpio_init(detectorPin);
+  adc_gpio_init(refPin);
+  adc_gpio_init(coilIPin);
+  
 }
 
 void loop1(void) {
-  uint64_t t = getTime();
-  if (bitRead(t, 0)) { // only read on odd microseconds -- maximum 500 kHz
-    analogReadFunctionCore1();
-    while (getTime() == t) {
-        ; // blank - wait for at least one microsecond to pass
-    }
-  }
+  analogReadFunctionCore1();
+//  uint64_t t = getTime();
+//  if (bitRead(t, 0)) { // only read on odd microseconds -- maximum 500 kHz
+//    analogReadFunctionCore1();
+//    while (getTime() == t) {
+//        ; // blank - wait for at least one microsecond to pass
+//    }
+//  }
 }
 
 /********************  core0 all others ********************************/
@@ -240,11 +264,18 @@ void setup() {
 
   setLED(255);
 
+
+
   Wire1.setSDA(sda1Pin);
-  Wire1.setSCL(scl1Pin);
+  Wire1.setSCL(scl1Pin);  
   Wire1.begin();
   setGain(0);
+
+
+  
   setupAGR();
+
+
 
   if (hardware_alarm_is_claimed(coil_alarm_num)) {
     sendMessage("hardware coil alarm is claimed!!!!", 0);
@@ -261,6 +292,7 @@ void setup() {
   if (enableDataTransmission) {
     verbosity = -1;
   }
+  delay(5000);
 
 }
 
@@ -282,7 +314,7 @@ void setCoil(bool activate, float duration = -1) {
 
 void setLED (uint8_t level) {
   analogWrite(actLEDPin, level);
- }
+}
 
 
 void setGain(byte g) {
@@ -301,6 +333,9 @@ uint64_t getTime() {
 }
 
 void setLedMessage (LedMessageTypeT msg, bool setting) {
+  if (msg == BAD_MSG) {
+    digitalWrite(25, setting);
+  }
   return; //no leds on current board
   //digitalWrite(indicatorPins[msg], setting);
 }
@@ -312,12 +347,13 @@ void setupPins() {
   //enable pullups for i2c - these should be present on board, but are missing in prototype design
   pinMode(scl1Pin, INPUT_PULLUP);
   pinMode(sda1Pin, INPUT_PULLUP);
-
-  pinMode(detectorPin, INPUT);
-  pinMode(refPin, INPUT);
-
+  
   pinMode(gainSet0, OUTPUT);
   pinMode(gainSet1, OUTPUT);
+  pinMode(actCoilPin, OUTPUT);
+  pinMode(actLEDPin, OUTPUT);
+
+  
 }
 
 
@@ -396,6 +432,11 @@ void toggleCoil_isr(uint alarm_num) {
 elapsedMillis loopT;
 int ctr = 0;
 void loop() {
+//  delay(500);
+//  setLED(255);
+//  delay(500);
+//  setLED(0);
+//  return;
 
   pollADC();
   pollAGR();
@@ -405,22 +446,6 @@ void loop() {
 
 }
 
-//now handled in ADC loop
-//void pollCoil (void) {
-//  bool trans = !coilReading.val != !coilState;
-//  if (trans) {
-//    coilTransmitFifo.unshift(coilReading);
-//  }
-//  coilReading.us = getTime();
-//  coilReading.val = coilState;
-//  if (trans || coilTransmitT > 100) {
-//    coilTransmitFifo.unshift(coilReading);
-//    if (coilTransmitT > 100) {
-//      coilTransmitT = coilTransmitT - 100;
-//    }
-//  }
-//
-//}
 
 void setReadyForCrossing(bool r) {
   readyForCrossing = r;
@@ -432,15 +457,24 @@ bool newDetector() {
   if (rp2040.fifo.available() < 4) {
     return false;
   }
-  uint64_t us = setLowerHalf(getTime(), rp2040.fifo.pop());
-  float det = vscaler*rp2040.fifo.pop();
-  float ref = vscaler*rp2040.fifo.pop();
-  float coilAmps = vscaler*rp2040.fifo.pop()/1.1; //1.1 V = 1 amp
+  uint32_t reading;
+  bool valid = true;
+  valid = valid && rp2040.fifo.pop_nb(&reading);
+  uint64_t us = setLowerHalf(getTime(), reading);
+
+  valid = valid && rp2040.fifo.pop_nb(&reading);
+  float det = vscaler*reading;
+
+  valid = valid && rp2040.fifo.pop_nb(&reading);
+  float ref = vscaler*reading;
+
+  valid = valid && rp2040.fifo.pop_nb(&reading);
+  float coilAmps = vscaler*reading/1.1; //1.1 V = 1 amp
   lastReading.us = us;
   lastReading.val = det - ref;
   coilReading.us = us;
   coilReading.val = coilAmps;
-  return true;
+  return valid;
 }
 
 void pollADC (void) {
@@ -448,8 +482,10 @@ void pollADC (void) {
   if (!newDetector()) {
     return;
   }
-  analogTransmitFifo.unshift(lastReading);
-  coilTransmitFifo.unshift(coilReading);
+  if (enableDataTransmission) {
+    analogTransmitFifo.unshift(lastReading);
+    coilTransmitFifo.unshift(coilReading);
+  }
   bool high = false;
   bool low = false;
   if (readyForCrossing && abs(lastReading.val) > abs(hysteresis)) {
@@ -534,7 +570,9 @@ void pollAGR(void) {
     reading.x = event.acceleration.x - accZero.x;
     reading.y = event.acceleration.y - accZero.y;
     reading.z = event.acceleration.z;
-    accelTransmitFifo.unshift(reading);
+    if (enableDataTransmission) {
+      accelTransmitFifo.unshift(reading);
+    }
   }
 
   if (hasMag) {
@@ -542,7 +580,9 @@ void pollAGR(void) {
     reading.x = event.magnetic.x;
     reading.y = event.magnetic.y;
     reading.z = event.magnetic.z;
-    magTransmitFifo.unshift(reading);
+    if (enableDataTransmission) {
+      magTransmitFifo.unshift(reading);
+    }
   }
 
 }
@@ -551,31 +591,14 @@ void pollTransmit() {
     if (!analogTransmitFifo.isEmpty()) {
       setLedMessage(TRANSMIT_SERIAL, true);
       if (enableADCTransmission) {
-        sendReading1(coilTransmitFifo.pop(), COIL);
+        sendReading1(analogTransmitFifo.pop(), DETVAL);
       } else {
-        coilTransmitFifo.pop();
+        analogTransmitFifo.pop();
       }
   
       return;
     }
-//  if (analogTransmitFifo.size() >= numADCToAvg) {
-//    setLedMessage(TRANSMIT_SERIAL, true);
-//    double us = 0;
-//    double val = 0;
-//    Reading1T r;
-//    Reading1T avgreading;
-//    for (unsigned int j = 0; j < numADCToAvg; ++j) {
-//      r = analogTransmitFifo.pop();
-//      us += r.us;
-//      val += r.val;
-//    }
-//    avgreading.us = us / numADCToAvg;
-//    avgreading.val = val / numADCToAvg;
-//    if (enableADCTransmission) {
-//      sendReading1(avgreading, DETVAL);
-//    }
-//    return;
-//  }
+
   if (!magTransmitFifo.isEmpty()) {
     setLedMessage(TRANSMIT_SERIAL, true);
     if (enableMagTransmission) {
@@ -801,6 +824,7 @@ void parseCommand (CommandT c) {
       return;
     case 'V':
       verbosity = c.data[0];
+      sendMessage("verbosity set to " + String(c.data[0]),1);
       return;
     case 'R':
       Serial.println(VERSION);
