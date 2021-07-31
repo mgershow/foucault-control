@@ -89,8 +89,8 @@ CircularBuffer<EventT, 1000> scratchEventStack;
 /**************** PIN CONFIGURATIONS  ***************************/
 /********** REVISED FOR PICO 2021 BOARD *****************************/
 
-const int actCoilPin = 12;
-const int actLEDPin = 11;
+const int actCoilPin = 9;
+const int actLEDPin = 8;
 const int gainSet0 = 6;
 const int gainSet1 = 7;
 

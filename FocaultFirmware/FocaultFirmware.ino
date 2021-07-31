@@ -289,16 +289,22 @@ void startAGRTimer() {
 
 void setup() {
   // put your setup code here, to run once:
+  Serial.begin(115200);
+  while(!Serial) {
+    delay (100);
+  }
+  //require a serial connection, or everything stays in input mode (I think all pins default to input)
+  //if usb is not connected -- for compatibility with PMMs 2 board setup
   setupPins();
-  Serial.begin(9600);
+ // Serial.begin(9600);
   elapsedMillis serialWait;
   int j = 0;
-  while(!Serial && serialWait < 10000) {
-    setLEDIndicators(j);
-    setLED(j);
-    j = (j+1) % 256; 
-    delay(20);
-  }
+//  while(!Serial && serialWait < 10000) {
+//    setLEDIndicators(j);
+//    setLED(j);
+//    j = (j+1) % 256; 
+//    delay(20);
+//  }
   setLEDIndicators(0);
   setLED(255);
   
