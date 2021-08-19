@@ -751,6 +751,10 @@ void sendReading (Reading3T reading, TransmitTypeT t) {
 void sendBinaryData(uint8_t ttype, uint64_t us, float data[]) {
   //ttype is type of transmission
   //us is time in microseconds, lowest 48 bits sent - rollover in 9 years
+
+  if (!enableTransmission) {
+    return;
+  }
   
   uint8_t tbuff[20];
   tbuff[0] = ttype;
@@ -882,6 +886,9 @@ void parseCommand (CommandT c) {
     case 'F':
       autoFlash = c.data[0];
       return;
+    case 'S':
+      sendSynchronization();
+      sendSynchronization();
     default:
       setLedMessage(BAD_MSG, true);
 
