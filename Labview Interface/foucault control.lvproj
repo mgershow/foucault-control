@@ -156,7 +156,7 @@
 				<Property Name="Bld_localDestDirType" Type="Str">relativeToCommon</Property>
 				<Property Name="Bld_modifyLibraryFile" Type="Bool">true</Property>
 				<Property Name="Bld_previewCacheID" Type="Str">{014C67BE-EFC4-4BA3-B79C-A5EE4C0245B6}</Property>
-				<Property Name="Bld_version.build" Type="Int">8</Property>
+				<Property Name="Bld_version.build" Type="Int">9</Property>
 				<Property Name="Bld_version.major" Type="Int">1</Property>
 				<Property Name="Destination[0].destName" Type="Str">Foucalt Control Panel.exe</Property>
 				<Property Name="Destination[0].path" Type="Path">../builds/NI_AB_PROJECTNAME/Application/Foucalt Control Panel.exe</Property>
@@ -188,8 +188,8 @@
 				<Property Name="Destination[0].type" Type="Str">userFolder</Property>
 				<Property Name="DestinationCount" Type="Int">1</Property>
 				<Property Name="DistPart[0].flavorID" Type="Str">DefaultFull</Property>
-				<Property Name="DistPart[0].productID" Type="Str">{159357FB-556F-4790-8917-D52C99DC5F91}</Property>
-				<Property Name="DistPart[0].productName" Type="Str">NI LabVIEW Runtime 2017 SP1 f1</Property>
+				<Property Name="DistPart[0].productID" Type="Str">{1A4448CF-1F95-420D-ABAD-2AB572A8A341}</Property>
+				<Property Name="DistPart[0].productName" Type="Str">NI LabVIEW Runtime 2017 SP1 f3</Property>
 				<Property Name="DistPart[0].SoftDep[0].exclude" Type="Bool">false</Property>
 				<Property Name="DistPart[0].SoftDep[0].productName" Type="Str">NI LabVIEW Runtime 2017 SP1 Non-English Support.</Property>
 				<Property Name="DistPart[0].SoftDep[0].upgradeCode" Type="Str">{182AE811-85B6-4238-B67E-F19497CC186B}</Property>
@@ -200,19 +200,19 @@
 				<Property Name="DistPart[0].SoftDep[10].productName" Type="Str">NI mDNS Responder 17.0</Property>
 				<Property Name="DistPart[0].SoftDep[10].upgradeCode" Type="Str">{9607874B-4BB3-42CB-B450-A2F5EF60BA3B}</Property>
 				<Property Name="DistPart[0].SoftDep[11].exclude" Type="Bool">false</Property>
-				<Property Name="DistPart[0].SoftDep[11].productName" Type="Str">NI Deployment Framework 2017</Property>
+				<Property Name="DistPart[0].SoftDep[11].productName" Type="Str">NI Deployment Framework 2018</Property>
 				<Property Name="DistPart[0].SoftDep[11].upgradeCode" Type="Str">{838942E4-B73C-492E-81A3-AA1E291FD0DC}</Property>
 				<Property Name="DistPart[0].SoftDep[12].exclude" Type="Bool">false</Property>
-				<Property Name="DistPart[0].SoftDep[12].productName" Type="Str">NI Error Reporting 2017</Property>
+				<Property Name="DistPart[0].SoftDep[12].productName" Type="Str">NI Error Reporting 2018</Property>
 				<Property Name="DistPart[0].SoftDep[12].upgradeCode" Type="Str">{42E818C6-2B08-4DE7-BD91-B0FD704C119A}</Property>
 				<Property Name="DistPart[0].SoftDep[2].exclude" Type="Bool">false</Property>
 				<Property Name="DistPart[0].SoftDep[2].productName" Type="Str">Math Kernel Libraries</Property>
 				<Property Name="DistPart[0].SoftDep[2].upgradeCode" Type="Str">{699C1AC5-2CF2-4745-9674-B19536EBA8A3}</Property>
 				<Property Name="DistPart[0].SoftDep[3].exclude" Type="Bool">false</Property>
-				<Property Name="DistPart[0].SoftDep[3].productName" Type="Str">NI Logos 5.9</Property>
+				<Property Name="DistPart[0].SoftDep[3].productName" Type="Str">NI Logos 18.0</Property>
 				<Property Name="DistPart[0].SoftDep[3].upgradeCode" Type="Str">{5E4A4CE3-4D06-11D4-8B22-006008C16337}</Property>
 				<Property Name="DistPart[0].SoftDep[4].exclude" Type="Bool">false</Property>
-				<Property Name="DistPart[0].SoftDep[4].productName" Type="Str">NI TDM Streaming 17.0</Property>
+				<Property Name="DistPart[0].SoftDep[4].productName" Type="Str">NI TDM Streaming 18.0</Property>
 				<Property Name="DistPart[0].SoftDep[4].upgradeCode" Type="Str">{4CD11BE6-6BB7-4082-8A27-C13771BC309B}</Property>
 				<Property Name="DistPart[0].SoftDep[5].exclude" Type="Bool">false</Property>
 				<Property Name="DistPart[0].SoftDep[5].productName" Type="Str">NI LabVIEW Web Server 2017</Property>
@@ -236,8 +236,8 @@
 				<Property Name="DistPart[1].productName" Type="Str">NI-VISA Runtime 17.5</Property>
 				<Property Name="DistPart[1].upgradeCode" Type="Str">{8627993A-3F66-483C-A562-0D3BA3F267B1}</Property>
 				<Property Name="DistPart[2].flavorID" Type="Str">DefaultFull</Property>
-				<Property Name="DistPart[2].productID" Type="Str">{6852ED74-2B90-495F-A097-E12F7346F4A6}</Property>
-				<Property Name="DistPart[2].productName" Type="Str">NI LabVIEW Runtime 2017 SP1 (64-bit)</Property>
+				<Property Name="DistPart[2].productID" Type="Str">{8991A5A3-2CCE-4F33-BBDB-B24AEFE052EF}</Property>
+				<Property Name="DistPart[2].productName" Type="Str">NI LabVIEW Runtime 2017 SP1 f3 (64-bit)</Property>
 				<Property Name="DistPart[2].SoftDep[0].exclude" Type="Bool">false</Property>
 				<Property Name="DistPart[2].SoftDep[0].productName" Type="Str">NI ActiveX Container (64-bit)</Property>
 				<Property Name="DistPart[2].SoftDep[0].upgradeCode" Type="Str">{1038A887-23E1-4289-B0BD-0C4B83C6BA21}</Property>
@@ -245,16 +245,16 @@
 				<Property Name="DistPart[2].SoftDep[1].productName" Type="Str">Math Kernel Libraries</Property>
 				<Property Name="DistPart[2].SoftDep[1].upgradeCode" Type="Str">{699C1AC5-2CF2-4745-9674-B19536EBA8A3}</Property>
 				<Property Name="DistPart[2].SoftDep[10].exclude" Type="Bool">false</Property>
-				<Property Name="DistPart[2].SoftDep[10].productName" Type="Str">NI Deployment Framework 2017</Property>
+				<Property Name="DistPart[2].SoftDep[10].productName" Type="Str">NI Deployment Framework 2018</Property>
 				<Property Name="DistPart[2].SoftDep[10].upgradeCode" Type="Str">{838942E4-B73C-492E-81A3-AA1E291FD0DC}</Property>
 				<Property Name="DistPart[2].SoftDep[11].exclude" Type="Bool">false</Property>
-				<Property Name="DistPart[2].SoftDep[11].productName" Type="Str">NI Error Reporting 2017 (64-bit)</Property>
+				<Property Name="DistPart[2].SoftDep[11].productName" Type="Str">NI Error Reporting 2018 (64-bit)</Property>
 				<Property Name="DistPart[2].SoftDep[11].upgradeCode" Type="Str">{785BE224-E5B2-46A5-ADCB-55C949B5C9C7}</Property>
 				<Property Name="DistPart[2].SoftDep[2].exclude" Type="Bool">false</Property>
-				<Property Name="DistPart[2].SoftDep[2].productName" Type="Str">NI Logos 5.9</Property>
+				<Property Name="DistPart[2].SoftDep[2].productName" Type="Str">NI Logos 18.0</Property>
 				<Property Name="DistPart[2].SoftDep[2].upgradeCode" Type="Str">{5E4A4CE3-4D06-11D4-8B22-006008C16337}</Property>
 				<Property Name="DistPart[2].SoftDep[3].exclude" Type="Bool">false</Property>
-				<Property Name="DistPart[2].SoftDep[3].productName" Type="Str">NI TDM Streaming 17.0</Property>
+				<Property Name="DistPart[2].SoftDep[3].productName" Type="Str">NI TDM Streaming 18.0</Property>
 				<Property Name="DistPart[2].SoftDep[3].upgradeCode" Type="Str">{4CD11BE6-6BB7-4082-8A27-C13771BC309B}</Property>
 				<Property Name="DistPart[2].SoftDep[4].exclude" Type="Bool">false</Property>
 				<Property Name="DistPart[2].SoftDep[4].productName" Type="Str">NI LabVIEW Web Server 2017 (64-bit)</Property>
@@ -272,7 +272,7 @@
 				<Property Name="DistPart[2].SoftDep[8].productName" Type="Str">NI VC2015 Runtime</Property>
 				<Property Name="DistPart[2].SoftDep[8].upgradeCode" Type="Str">{D42E7BAE-6589-4570-B6A3-3E28889392E7}</Property>
 				<Property Name="DistPart[2].SoftDep[9].exclude" Type="Bool">false</Property>
-				<Property Name="DistPart[2].SoftDep[9].productName" Type="Str">NI mDNS Responder 14.0</Property>
+				<Property Name="DistPart[2].SoftDep[9].productName" Type="Str">NI mDNS Responder 17.0</Property>
 				<Property Name="DistPart[2].SoftDep[9].upgradeCode" Type="Str">{9607874B-4BB3-42CB-B450-A2F5EF60BA3B}</Property>
 				<Property Name="DistPart[2].SoftDepCount" Type="Int">12</Property>
 				<Property Name="DistPart[2].upgradeCode" Type="Str">{0A5935DD-3D5B-4396-8769-038C205F86EA}</Property>
@@ -284,9 +284,9 @@
 				<Property Name="INST_buildSpecName" Type="Str">foucault control installer</Property>
 				<Property Name="INST_defaultDir" Type="Str">{AF813D56-CD50-4F37-8597-48D1AB98F45A}</Property>
 				<Property Name="INST_productName" Type="Str">foucault control</Property>
-				<Property Name="INST_productVersion" Type="Str">1.0.10</Property>
+				<Property Name="INST_productVersion" Type="Str">1.0.11</Property>
 				<Property Name="InstSpecBitness" Type="Str">32-bit</Property>
-				<Property Name="InstSpecVersion" Type="Str">17018006</Property>
+				<Property Name="InstSpecVersion" Type="Str">17018010</Property>
 				<Property Name="MSI_arpCompany" Type="Str">NYU</Property>
 				<Property Name="MSI_arpURL" Type="Str">http://www.nyu.com/</Property>
 				<Property Name="MSI_distID" Type="Str">{3384E500-D6B8-45F4-9A9C-50CB869F2DB6}</Property>
