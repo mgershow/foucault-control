@@ -752,7 +752,7 @@ void sendBinaryData(uint8_t ttype, uint64_t us, float data[]) {
   //ttype is type of transmission
   //us is time in microseconds, lowest 48 bits sent - rollover in 9 years
 
-  if (!enableTransmission) {
+  if (!enableDataTransmission) {
     return;
   }
   
