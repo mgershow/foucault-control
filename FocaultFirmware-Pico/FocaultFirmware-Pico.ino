@@ -1,8 +1,8 @@
 #include "pico/stdlib.h"
 #include <CircularBuffer.h>
-#include <Adafruit_LIS2MDL.h>
+#include <Adafruit_LIS3MDL.h>
 #include <Adafruit_Sensor.h>
-#include <Adafruit_LSM303_Accel.h>
+//#include <Adafruit_LSM303_Accel.h>
 #include <Wire.h>
 #include <EEPROM.h>
 #include <elapsedMillis.h>
@@ -19,8 +19,8 @@
 #define VERSION 6
 
 
-Adafruit_LIS2MDL lis2mdl = Adafruit_LIS2MDL(1);
-Adafruit_LSM303_Accel_Unified accel = Adafruit_LSM303_Accel_Unified(54321);
+Adafruit_LIS3MDL lis3mdl = Adafruit_LIS3MDL();
+//Adafruit_LSM303_Accel_Unified accel = Adafruit_LSM303_Accel_Unified(54321);
 
 
 bool enableDataTransmission = false;
@@ -109,7 +109,7 @@ const int coil_alarm_num = 1;
 const float slopeMult = 50.35f;
 const float radian = 57.295779513082321f;
  
-const uint32_t agrPeriod = 10000; //us = 100 Hz
+const uint32_t agrPeriod = 3333; //us = 300 Hz
 
 /***************************************************************/
 /******************* configurations ***************************/
@@ -380,17 +380,18 @@ void setupAGR() {
   // Enable the accelerometer (100Hz)
   // ctrl1.write(0x57);
 
-  if (!hasAcc) {
-    hasAcc = accel.begin(0x19, &Wire1);
-    accel.setRange(LSM303_RANGE_2G);
-    accel.setMode(LSM303_MODE_HIGH_RESOLUTION);
-  }
+//  if (!hasAcc) {
+//    hasAcc = accel.begin(0x19, &Wire1);
+//    accel.setRange(LSM303_RANGE_2G);
+//    accel.setMode(LSM303_MODE_HIGH_RESOLUTION);
+//  }
 
   if (!hasMag) {
-    lis2mdl.enableAutoRange(true);
-    hasMag = lis2mdl.begin(0x1E, &Wire1);
+    hasMag = lis3mdl.begin_I2C(LIS3MDL_I2CADDR_DEFAULT, &Wire1);
     if (hasMag) {
-      lis2mdl.setDataRate(lis2mdl_rate_t::LIS2MDL_RATE_100_HZ);
+      lis3mdl.setRange(lis3mdl_range_t::LIS3MDL_RANGE_16_GAUSS);
+      lis3mdl.setDataRate(lis3mdl_dataRate_t::LIS3MDL_DATARATE_300_HZ);
+      lis3mdl.setOperationMode(lis3mdl_operationmode_t::LIS3MDL_CONTINUOUSMODE);
     }
   }
 }
@@ -585,6 +586,11 @@ bool newAGR(void) {
   if (!timePassed(nextReading)) {
     return false;
   }
+  if (hasMag) {
+    if (!lis3mdl.magneticFieldAvailable()) {
+      return false;
+    }
+  }
   while (timePassed(nextReading)) {
     nextReading = delayed_by_us(nextReading, agrPeriod);
   }
@@ -600,18 +606,18 @@ void pollAGR(void) {
   reading.us = getTime();
   sensors_event_t event;
 
-  if (hasAcc) {
-    accel.getEvent(&event);
-    reading.x = event.acceleration.x - accZero.x;
-    reading.y = event.acceleration.y - accZero.y;
-    reading.z = event.acceleration.z;
-    if (enableDataTransmission) {
-      accelTransmitFifo.unshift(reading);
-    }
-  }
+//  if (hasAcc) {
+//    accel.getEvent(&event);
+//    reading.x = event.acceleration.x - accZero.x;
+//    reading.y = event.acceleration.y - accZero.y;
+//    reading.z = event.acceleration.z;
+//    if (enableDataTransmission) {
+//      accelTransmitFifo.unshift(reading);
+//    }
+//  }
 
   if (hasMag) {
-    lis2mdl.getEvent(&event);
+    lis3mdl.getEvent(&event);
     reading.x = event.magnetic.x;
     reading.y = event.magnetic.y;
     reading.z = event.magnetic.z;
