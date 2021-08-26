@@ -206,6 +206,7 @@ void analogReadFunctionCore1 (void) {
   static uint16_t numreads = 0;
   static bool coilActive = false;
   static bool readDetector = true;
+  static int coilCountdown = 5;
   if (numreads == numADCToAvg) {
     rp2040.fifo.push(microtime);
     rp2040.fifo.push((uint32_t) readDetector);
@@ -216,7 +217,17 @@ void analogReadFunctionCore1 (void) {
     vrefaccum = 0;
     vcurraccum = 0;
     numreads = 0;
-    readDetector = !coilActive; //transition to reading detector after transmitting data - ensures coil voltage is not fed through
+    //keep reading the coil for 5 more cycles, approx 10 ms, to get all current integrated and suppress detector feedthrough
+    if (coilActive) {
+      coilCountdown = 5;
+    } else {
+      if (coilCountdown > 0) {
+        --coilCountdown;
+      }else {
+        readDetector = true;
+      }
+    }
+  //  readDetector = !coilActive; //transition to reading detector after transmitting data - ensures coil voltage is not fed through
     
   }
   uint32_t coilState;
@@ -619,7 +630,7 @@ void pollAGR(void) {
   if (hasMag) {
     lis3mdl.getEvent(&event);
     reading.x = event.magnetic.x;
-    reading.y = event.magnetic.y;
+    reading.y = -event.magnetic.y; //lis3mdl is reversed from lis2mdl (or at least board is), so left handed when facing down
     reading.z = event.magnetic.z;
     if (enableDataTransmission) {
       magTransmitFifo.unshift(reading);

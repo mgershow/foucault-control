@@ -29,7 +29,14 @@
 		<Item Name="typedefs" Type="Folder" URL="../typedefs">
 			<Property Name="NI.DISK" Type="Bool">true</Property>
 		</Item>
+		<Item Name="bofabthetaphi.vi" Type="VI" URL="../b-field fitter/bofabthetaphi.vi"/>
+		<Item Name="bofxy.vi" Type="VI" URL="../b-field fitter/bofxy.vi"/>
+		<Item Name="calc pendulum params.vi" Type="VI" URL="../b-field fitter/calc pendulum params.vi"/>
+		<Item Name="cluster_to_1darray_withscaling.vi" Type="VI" URL="../b-field fitter/cluster_to_1darray_withscaling.vi"/>
+		<Item Name="dBhelper.vi" Type="VI" URL="../b-field fitter/dBhelper.vi"/>
+		<Item Name="fit mag to ellipse.vi" Type="VI" URL="../b-field fitter/fit mag to ellipse.vi"/>
 		<Item Name="foucault control panel.vi" Type="VI" URL="../foucault control panel.vi"/>
+		<Item Name="graddphelper.vi" Type="VI" URL="../b-field fitter/graddphelper.vi"/>
 		<Item Name="Dependencies" Type="Dependencies">
 			<Item Name="vi.lib" Type="Folder">
 				<Item Name="BuildHelpPath.vi" Type="VI" URL="/&lt;vilib&gt;/Utility/error.llb/BuildHelpPath.vi"/>
@@ -102,6 +109,7 @@
 				<Item Name="NI_MABase.lvlib" Type="Library" URL="/&lt;vilib&gt;/measure/NI_MABase.lvlib"/>
 				<Item Name="NI_Matrix.lvlib" Type="Library" URL="/&lt;vilib&gt;/Analysis/Matrix/NI_Matrix.lvlib"/>
 				<Item Name="NI_PackedLibraryUtility.lvlib" Type="Library" URL="/&lt;vilib&gt;/Utility/LVLibp/NI_PackedLibraryUtility.lvlib"/>
+				<Item Name="NI_PtbyPt.lvlib" Type="Library" URL="/&lt;vilib&gt;/ptbypt/NI_PtbyPt.lvlib"/>
 				<Item Name="Not Found Dialog.vi" Type="VI" URL="/&lt;vilib&gt;/Utility/error.llb/Not Found Dialog.vi"/>
 				<Item Name="Number of Waveform Samples.vi" Type="VI" URL="/&lt;vilib&gt;/Waveform/WDTOps.llb/Number of Waveform Samples.vi"/>
 				<Item Name="Number To Enum.vim" Type="VI" URL="/&lt;vilib&gt;/Utility/Number To Enum.vim"/>
@@ -138,6 +146,7 @@
 				<Item Name="whitespace.ctl" Type="VI" URL="/&lt;vilib&gt;/Utility/error.llb/whitespace.ctl"/>
 				<Item Name="Write JPEG File.vi" Type="VI" URL="/&lt;vilib&gt;/picture/jpeg.llb/Write JPEG File.vi"/>
 			</Item>
+			<Item Name="ellipse_lm_objective.vi" Type="VI" URL="../b-field fitter/ellipse_lm_objective.vi"/>
 			<Item Name="lvanlys.dll" Type="Document" URL="/&lt;resource&gt;/lvanlys.dll"/>
 		</Item>
 		<Item Name="Build Specifications" Type="Build">
