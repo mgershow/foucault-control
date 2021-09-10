@@ -32,6 +32,7 @@
 		<Item Name="bofabthetaphi.vi" Type="VI" URL="../b-field fitter/bofabthetaphi.vi"/>
 		<Item Name="bofxy.vi" Type="VI" URL="../b-field fitter/bofxy.vi"/>
 		<Item Name="calc pendulum params.vi" Type="VI" URL="../b-field fitter/calc pendulum params.vi"/>
+		<Item Name="calculate pulse statistics.vi" Type="VI" URL="../voltage analysis/calculate pulse statistics.vi"/>
 		<Item Name="cluster_to_1darray_withscaling.vi" Type="VI" URL="../b-field fitter/cluster_to_1darray_withscaling.vi"/>
 		<Item Name="dBhelper.vi" Type="VI" URL="../b-field fitter/dBhelper.vi"/>
 		<Item Name="fit mag to ellipse.vi" Type="VI" URL="../b-field fitter/fit mag to ellipse.vi"/>
@@ -147,6 +148,7 @@
 				<Item Name="Write JPEG File.vi" Type="VI" URL="/&lt;vilib&gt;/picture/jpeg.llb/Write JPEG File.vi"/>
 			</Item>
 			<Item Name="ellipse_lm_objective.vi" Type="VI" URL="../b-field fitter/ellipse_lm_objective.vi"/>
+			<Item Name="extract to time range 3.vi" Type="VI" URL="../Control Panel/extract to time range 3.vi"/>
 			<Item Name="lvanlys.dll" Type="Document" URL="/&lt;resource&gt;/lvanlys.dll"/>
 		</Item>
 		<Item Name="Build Specifications" Type="Build">

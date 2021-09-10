@@ -67,7 +67,7 @@ typedef struct {
 
 
 typedef struct {
-  uint64_t us;
+  absolute_time_t us;
   ActionT action;
   float data[NUM_ACT_DATA];
 } EventT;
@@ -159,6 +159,8 @@ bool restarted = true;
 
 byte currentGain;
 
+EventT nextEvent;
+bool eventCompleted = true;
 
 /*********************** core1 analog read ***********************/
 
@@ -462,8 +464,8 @@ void loop() {
 
   pollADC();
   pollAGR();
-  pollTransmit();
   pollEvent();
+  pollTransmit();
   pollSerial();
 
 }
@@ -567,7 +569,7 @@ void pollADC (void) {
       sendMessage("crossing at " + String(crossing.us * micro) + " slope = " + String(crossing.slope) + " halfPeriod = " + String(halfPeriod * micro), 1);
     }
     if (autoFire && halfPeriod < 4 * mega) {
-      setFiringAction(crossing.us + halfPeriod * pulsePhase / 180);
+      setFiringAction(toTimeStamp(crossing.us + halfPeriod * pulsePhase / 180 - pulseDuration*mega/2));
     }
     lastCrossing = crossing;
     retrigger = false;
@@ -584,6 +586,7 @@ absolute_time_t   to
 bool timePassed (absolute_time_t targetTime) {
   return absolute_time_diff_us(get_absolute_time(), targetTime) <= 0;
 }
+
 
 bool timePassed (uint64_t targetTime) {
   absolute_time_t t;
@@ -689,8 +692,11 @@ void pollTransmit() {
 }
 
 void pollEvent() {
-  if (!eventFifo.isEmpty() && doEvent(eventFifo.last())) {
-    eventFifo.pop();
+  if (!eventFifo.isEmpty() && eventCompleted) {
+    if (scheduleEvent(eventFifo.last())) {
+      
+      eventFifo.pop();
+    }
   }
 }
 
@@ -701,7 +707,7 @@ void pollSerial() {
 
 /********** other ****************/
 
-void setFiringAction(double us) {
+void setFiringAction(absolute_time_t us) {
   restarted = false;
   setReadyForCrossing(false);
   EventT event;
@@ -711,7 +717,7 @@ void setFiringAction(double us) {
   event.data[1] = pulseDuration;
   addEvent(event);
 
-  event.us = event.us + (pulseDuration + retriggerDelay) * mega;
+  event.us = delayed_by_us(us, (pulseDuration + retriggerDelay) * mega);
   event.action = SET_READY;
   event.data[0] = 1;
   event.data[1] = 0;
@@ -728,7 +734,7 @@ void setFiringAction(double us) {
 
 void addEvent (EventT event) {
   if (!enableDataTransmission) {
-    sendMessage("event set for " + String(event.us * micro) + " action = " + String(event.action) + " data[0] = " + String(event.data[0]) +  " data[1] = " + String(event.data[1], 6), 1);
+    sendMessage("event set for " + String(to_us_since_boot(event.us) * micro) + " action = " + String(event.action) + " data[0] = " + String(event.data[0]) +  " data[1] = " + String(event.data[1], 6), 1);
   }
   if (eventFifo.isEmpty()) {
     eventFifo.unshift(event);
@@ -737,7 +743,10 @@ void addEvent (EventT event) {
 
   //make sure event is inserted in order, so that elements are sorted in order of descending us
   //(last is earliest event; first is latest event)
-  while (!eventFifo.isEmpty() && eventFifo.first().us > event.us) {
+  //static int64_t absolute_time_diff_us  ( absolute_time_t   from, absolute_time_t   to )
+  //positive if to is after from except in case of overflow   
+
+  while (!eventFifo.isEmpty() && absolute_time_diff_us(event.us, eventFifo.first().us) > 0) {
     scratchEventStack.push(eventFifo.shift());
   }
   eventFifo.unshift(event);
@@ -832,6 +841,12 @@ void processSerialLine() {
   parseCommand(c);
 }
 
+absolute_time_t toTimeStamp(uint64_t us) {
+  absolute_time_t t;
+  update_us_since_boot(&t, us);
+  return t;
+}
+
 void parseCommand (CommandT c) {
   EventT event;
   switch (toupper(c.cmd)) {
@@ -842,7 +857,7 @@ void parseCommand (CommandT c) {
       if (c.us <= getTime()) {
         setCoil(true, c.data[0]);
       } else {
-        event.us = c.us;
+        event.us = toTimeStamp(c.us);
         event.action = SET_COIL;
         event.data[0] = 1;
         event.data[1] = c.data[0];
@@ -854,7 +869,7 @@ void parseCommand (CommandT c) {
       if (c.us <= getTime()) {
         setCoil(false);
       } else {
-        event.us = c.us;
+        event.us = toTimeStamp(c.us);
         event.action = SET_COIL;
         event.data[0] = 0;
         event.data[1] = -1;
@@ -865,7 +880,7 @@ void parseCommand (CommandT c) {
       if (c.us <= getTime()) {
         setLED(c.data[0]);
       } else {
-        event.us = c.us;
+        event.us = toTimeStamp(c.us);
         event.action = SET_LED;
         event.data[0] = c.data[0];
         addEvent(event);
@@ -912,24 +927,62 @@ void parseCommand (CommandT c) {
   }
 }
 
-bool doEvent (EventT event) {
-  //returns true if event is executed
-  if (getTime() < event.us) {
-    return false;
-  }
-  switch (event.action) {
+
+
+int64_t eventCallback(alarm_id_t id, void *data) {
+  EventT *event = (EventT *) data;
+  switch (event->action) {
     case SET_COIL:
-      setCoil(event.data[0], event.data[1]);
+      setCoil(event->data[0], event->data[1]);
       break;
     case SET_LED:
-      setLED(event.data[0]);
+      setLED(event->data[0]);
       break;
     case SET_READY:
-      setReadyForCrossing(event.data[0]);
+      setReadyForCrossing(event->data[0]);
       break;
   }
-  return true;
+  eventCompleted = true;
+  return 0;
 }
+
+/*static alarm_id_t add_alarm_at  ( absolute_time_t   time,
+alarm_callback_t  callback,
+void *  user_data,
+bool  fire_if_past 
+) 
+*/
+bool scheduleEvent(EventT event) {
+  nextEvent = event;
+  int rv = (add_alarm_at(event.us, eventCallback, &nextEvent, true) >= 0);
+  if (rv == 0) {
+    eventCompleted = true;
+  }
+  if (rv > 0) {
+    eventCompleted = false; 
+  }
+  return (rv >= 0);
+}
+
+//
+//bool doEvent (EventT event) {
+//  //returns true if event is executed
+//  if (getTime() < event.us) {
+//    return false;
+//  }
+//  switch (event.action) {
+//    case SET_COIL:
+//      setCoil(event.data[0], event.data[1]);
+//      break;
+//    case SET_LED:
+//      setLED(event.data[0]);
+//      break;
+//    case SET_READY:
+//      setReadyForCrossing(event.data[0]);
+//      break;
+//  }
+//  return true;
+//}
 
 void sendMessage(String msg, int v) {
   if (enableDataTransmission) {
