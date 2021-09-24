@@ -2,12 +2,14 @@
 #include <CircularBuffer.h>
 #include <Adafruit_LIS3MDL.h>
 #include <Adafruit_Sensor.h>
-//#include <Adafruit_LSM303_Accel.h>
 #include <Wire.h>
 #include <EEPROM.h>
 #include <elapsedMillis.h>
 #include "pico/multicore.h"
 #include "hardware/adc.h"
+#include "hardware/watchdog.h"
+#include <ArduinoJson.h>
+#include "LittleFS.h"
 
 #define mega 1000000.f
 #define micro 0.000001f
@@ -16,11 +18,10 @@
 #define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
 
-#define VERSION 6
+#define VERSION 7
 
 
 Adafruit_LIS3MDL lis3mdl = Adafruit_LIS3MDL();
-//Adafruit_LSM303_Accel_Unified accel = Adafruit_LSM303_Accel_Unified(54321);
 
 
 bool enableDataTransmission = false;
@@ -29,7 +30,9 @@ bool enableMagTransmission = true;
 bool enableAccTransmission = true;
 bool enableCoilTransmission = true;
 
-bool autoFlash = true;
+typedef enum {NONE, FIRE, CROSS} FlashT;
+FlashT autoFlash = NONE;
+
 
 typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
@@ -37,7 +40,7 @@ typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
 typedef enum {SYNC, DETVAL, COILI, MAGVEC, ACCVEC} TransmitTypeT;
 
-typedef enum {COIL_ON, BAD_MSG, READY_FOR_CROSSING, AUTO_ON, LED_ON, TRANSMIT_SERIAL } LedMessageTypeT;
+typedef enum {BAD_MSG,PICO_ERROR,  AUTO_ON, READY_FOR_CROSSING, COIL_ON, LED_ON, TRANSMIT_SERIAL, WATCHDOG_REBOOT} LedMessageTypeT;
 
 typedef struct {
   uint64_t us;
@@ -79,8 +82,6 @@ CircularBuffer<Reading3T, 500> coilTransmitFifo;
 
 CircularBuffer<Reading3T, 500> magTransmitFifo;
 
-CircularBuffer<Reading3T, 100> accelTransmitFifo;
-
 CircularBuffer<CommandT, 200> commandStack;
 
 CircularBuffer<EventT, 1000> eventFifo;
@@ -109,33 +110,27 @@ const int coil_alarm_num = 1;
 const float slopeMult = 50.35f;
 const float radian = 57.295779513082321f;
  
-const uint32_t agrPeriod = 3333; //us = 300 Hz
+const uint32_t magPeriod = 3333; //us = 300 Hz
+
+const uint8_t indicatorPins[8] = {16,17,18,19,20,21,22,12};
 
 /***************************************************************/
 /******************* configurations ***************************/
-float pulseDuration = 0.008; //seconds
-float pulsePhase = 18; // degrees
-float hysteresis = -0.1; // volts, - indicates trigger on falling
+float pulseDuration = 0.003; //seconds
+float pulsePhase = 40; // degrees
+float hysteresis = 0.01; // volts, - indicates trigger on falling
+float trimVoltage = 0; // volts - voltage to subtract from reading
 bool autoFire = true; //whether to auto fire
 float retriggerDelay = 0.25; //seconds AFTER pulse delivery
 
 float vref = 1.25;
-
 int verbosity = 100;
-
-const uint16_t numADCToAvg = 200; //rate = 500kHz / 3 / numavgs --> 32 = 5 kHz; 64 = 2.5 kHz  -- in practice rate = 100 kHz / numavgs due to overhead [1 khz = too fast for serial transmission]
+const uint16_t numADCToAvg = 200; //rate < 500kHz / 3 / numavgs --> was 200 (about 800Hz), changed to 100 9/23/21 version 7
 const float vscaler = 3.3 / (4096.0 * (float) numADCToAvg); // vref / 4096 * numADCToAvg -- 4096 = 3.3 V; 256 summed readings
 
-const byte EEPROM_ACC_CODE = 123; //if byte at eeprom_acc_address is 123, then magnetometer data has been written
-const int EEPROM_ACC_ADDRESS = 900; //arbitrary choice
-struct {
-  float x = 0;
-  float y = 0;
-} accZero;
-uint8_t numEepromWrites = 0; //prevent writing eeprom more than 255 times per power cycle - avoid accidental fatigue
+const char *configname = "config.txt";
 
 /********************* state GLOBALS ********************************/
-
 
 
 Reading1T lastHigh;
@@ -146,7 +141,6 @@ Reading3T coilReading;
 volatile bool readyForCrossing = true;
 
 volatile bool hasMag = false;
-volatile bool hasAcc = false;
 
 volatile bool coilState;
 
@@ -157,10 +151,12 @@ crossingT lastCrossing;
 
 bool restarted = true;
 
-byte currentGain;
+byte gainSetting;
 
 EventT nextEvent;
 bool eventCompleted = true;
+
+uint64_t coilOnTime;
 
 /*********************** core1 analog read ***********************/
 
@@ -219,9 +215,9 @@ void analogReadFunctionCore1 (void) {
     vrefaccum = 0;
     vcurraccum = 0;
     numreads = 0;
-    //keep reading the coil for 5 more cycles, approx 10 ms, to get all current integrated and suppress detector feedthrough
+    //keep reading the coil for 10 more cycles, approx 5 ms, to get all current integrated and suppress detector feedthrough
     if (coilActive) {
-      coilCountdown = 5;
+      coilCountdown = 10;
     } else {
       if (coilCountdown > 0) {
         --coilCountdown;
@@ -285,8 +281,18 @@ void loop1(void) {
 void setup() {
   // put your setup code here, to run once:
   setupPins();
+  setLedMessage(WATCHDOG_REBOOT, watchdog_caused_reboot());
+ 
   Serial.begin(9600);
   elapsedMillis serialWait;
+  while (!Serial && serialWait < 5000) {
+    delay(100);
+  }
+  LittleFS.begin();
+  if (loadConfiguration()) {
+    //error loading configuration, save defaults
+    saveConfiguration();
+  }
   int j = 0;
 
   setLED(255);
@@ -300,13 +306,14 @@ void setup() {
 
 
   
-  setupAGR();
+  setupMAG();
 
 
 
   if (hardware_alarm_is_claimed(coil_alarm_num)) {
     sendMessage("hardware coil alarm is claimed!!!!", 0);
-    assert(false);
+    setLedMessage(PICO_ERROR, true);
+    watchdog_reboot (0,0,1000);
   }else {
     hardware_alarm_claim(coil_alarm_num);
     hardware_alarm_set_callback(coil_alarm_num, toggleCoil_isr);
@@ -319,7 +326,9 @@ void setup() {
   if (enableDataTransmission) {
     verbosity = -1;
   }
+  LittleFS.begin();
   delay(5000);
+  watchdog_enable(5000, 1); 
 
 }
 
@@ -335,24 +344,29 @@ void setCoil(bool activate, float duration = -1) {
   if (duration > 0) {
      hardware_alarm_set_target(coil_alarm_num, make_timeout_time_us(duration * mega));
   }
-  if (autoFlash) {
+  if (activate) {
+    coilOnTime = time_us_64();
+  }
+  if (autoFlash == FIRE) {
     setLED(coilState ? 255 : 0);
   }
+  setLedMessage(COIL_ON, activate);
 }
 
 void setLED (uint8_t level) {
   analogWrite(actLEDPin, level);
+  setLedMessage(LED_ON, level); 
 }
 
 
 void setGain(byte g) {
   digitalWrite(gainSet0, bitRead(g, 0));
   digitalWrite(gainSet1, bitRead(g, 1));
-  currentGain = g;
+  gainSetting = g;
 }
 
 byte readGain() {
-  return currentGain;
+  return gainSetting;
 }
 
 uint64_t getTime() {
@@ -364,15 +378,16 @@ void setLedMessage (LedMessageTypeT msg, bool setting) {
   if (msg == BAD_MSG) {
     digitalWrite(25, setting);
   }
+  digitalWrite(indicatorPins[msg], setting);
   return; //no leds on current board
-  //digitalWrite(indicatorPins[msg], setting);
+  
 }
 
 /*************** setup *************************************/
 
 void setupPins() {
 
-  //enable pullups for i2c - these should be present on board, but are missing in prototype design
+  //enable pullups for i2c - these are present on board, but this is a belt/suspenders approach
   pinMode(scl1Pin, INPUT_PULLUP);
   pinMode(sda1Pin, INPUT_PULLUP);
   
@@ -381,23 +396,14 @@ void setupPins() {
   pinMode(actCoilPin, OUTPUT);
   pinMode(actLEDPin, OUTPUT);
 
+  for (int j = 0; j < 8; ++j) {
+    pinMode(indicatorPins[j], OUTPUT);
+  }
   
 }
 
 
-void setupAGR() {
-  //accelerometer initializes to 100 Hz reading rate
-  //from adafruit_lsm303_accell.cpp
-  // Adafruit_BusIO_Register ctrl1 =
-  //    Adafruit_BusIO_Register(i2c_dev, LSM303_REGISTER_ACCEL_CTRL_REG1_A, 1);
-  // Enable the accelerometer (100Hz)
-  // ctrl1.write(0x57);
-
-//  if (!hasAcc) {
-//    hasAcc = accel.begin(0x19, &Wire1);
-//    accel.setRange(LSM303_RANGE_2G);
-//    accel.setMode(LSM303_MODE_HIGH_RESOLUTION);
-//  }
+void setupMAG() {
 
   if (!hasMag) {
     hasMag = lis3mdl.begin_I2C(LIS3MDL_I2CADDR_DEFAULT, &Wire1);
@@ -414,41 +420,6 @@ void setupAGR() {
 
  
 
-
-void readAccZeroEeprom() {
-  byte code;
-  EEPROM.get(EEPROM_ACC_ADDRESS, code);
-  if (code == EEPROM_ACC_CODE) {
-    EEPROM.get(EEPROM_ACC_ADDRESS + sizeof(byte), accZero);
-  } else {
-    accZero.x = 0;
-    accZero.y = 0;
-  }
-  sendMessage("Accelerometer zero set to " + String(accZero.x) + ", " +  String(accZero.y), 1);
-
-}
-
-void writeAccZeroEeprom() {
-  return; // just don't
-  if (numEepromWrites >= 255) {
-    return;
-  }
-  numEepromWrites++;
-  byte code = EEPROM_ACC_CODE;
-  EEPROM.put(EEPROM_ACC_ADDRESS, code);
-  EEPROM.put(EEPROM_ACC_ADDRESS + sizeof(byte), accZero);
-}
-void zeroAccelerometer(float accXZero, float accYZero) {
-  accZero.x = accXZero;
-  accZero.y = accYZero;
-  //   sendMessage("Accelerometer zero set to " + String(accZero.x) + ", " +  String(accZero.y), 1);
-
-  writeAccZeroEeprom();
-  sendMessage("Accelerometer zero set to " + String(accZero.x) + ", " +  String(accZero.y), 1);
-  //    sendMessage("Accelerometer zero set to " + String(accXZero) + ", " +  String(accYZero), 1);
-
-}
-
 /**************** ISRs **********************************/
 
 
@@ -461,10 +432,11 @@ void toggleCoil_isr(uint alarm_num) {
 elapsedMillis loopT;
 int ctr = 0;
 void loop() {
+  watchdog_update();
+  pollEvent();
 
   pollADC();
-  pollAGR();
-  pollEvent();
+  pollMAG();
   pollTransmit();
   pollSerial();
 
@@ -473,6 +445,7 @@ void loop() {
 
 void setReadyForCrossing(bool r) {
   readyForCrossing = r;
+  setLedMessage(READY_FOR_CROSSING, r);
 }
 
 bool retrigger = false;
@@ -487,7 +460,13 @@ uint8_t newDetector() {
   uint64_t us = setLowerHalf(getTime(), reading);
   static uint64_t lastus = 0;
   valid = valid && rp2040.fifo.pop_nb(&reading);
+  static bool wasdetector = true;
+  
   bool isdetector = (bool) reading;
+  if (wasdetector && !isdetector) {
+    lastus = coilOnTime;
+  }
+  wasdetector = isdetector;
 
   valid = valid && rp2040.fifo.pop_nb(&reading);
   float det;
@@ -508,7 +487,7 @@ uint8_t newDetector() {
   }
   if (isdetector) {
     lastReading.us = us;
-    coilReading.y = lastReading.val = det - ref; //coilReading.y stores the last detector value before coil went on
+    coilReading.y = lastReading.val = det - ref - trimVoltage; //coilReading.y stores the last detector value before coil went on
     coilReading.z = 0;
     return 1;
   } else {
@@ -555,6 +534,8 @@ void pollADC (void) {
 
   setLedMessage(AUTO_ON, autoFire);
 
+  static bool crossing_led_on;
+
   if ( retrigger && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) {
 
     float dt = lastLow.us - lastHigh.us;
@@ -573,6 +554,10 @@ void pollADC (void) {
     }
     lastCrossing = crossing;
     retrigger = false;
+    if (autoFlash == CROSS) {
+      crossing_led_on = !crossing_led_on;
+      setLED (crossing_led_on ? 255 : 0);
+    }
   }
 
 }
@@ -595,8 +580,8 @@ bool timePassed (uint64_t targetTime) {
 }
 
 
-bool newAGR(void) {
-  static absolute_time_t nextReading = make_timeout_time_us(agrPeriod);
+bool newMAG(void) {
+  static absolute_time_t nextReading = make_timeout_time_us(magPeriod);
   if (!timePassed(nextReading)) {
     return false;
   }
@@ -606,29 +591,19 @@ bool newAGR(void) {
     }
   }
   while (timePassed(nextReading)) {
-    nextReading = delayed_by_us(nextReading, agrPeriod);
+    nextReading = delayed_by_us(nextReading, magPeriod);
   }
   return true;
   
 }
 
-void pollAGR(void) {
-  if (!newAGR()) {
+void pollMAG(void) {
+  if (!newMAG()) {
     return;
   }
   Reading3T reading;
   reading.us = getTime();
   sensors_event_t event;
-
-//  if (hasAcc) {
-//    accel.getEvent(&event);
-//    reading.x = event.acceleration.x - accZero.x;
-//    reading.y = event.acceleration.y - accZero.y;
-//    reading.z = event.acceleration.z;
-//    if (enableDataTransmission) {
-//      accelTransmitFifo.unshift(reading);
-//    }
-//  }
 
   if (hasMag) {
     lis3mdl.getEvent(&event);
@@ -669,15 +644,7 @@ void pollTransmit() {
     }
     return;
   }
-  if (!accelTransmitFifo.isEmpty()) {
-    setLedMessage(TRANSMIT_SERIAL, true);
-    if (enableAccTransmission) {
-      sendReading(accelTransmitFifo.pop(), ACCVEC);
-    } else {
-      accelTransmitFifo.pop();
-    }
-    return;
-  }
+  
   if (!coilTransmitFifo.isEmpty()) {
     setLedMessage(TRANSMIT_SERIAL, true);
     if (enableCoilTransmission) {
@@ -850,8 +817,9 @@ absolute_time_t toTimeStamp(uint64_t us) {
 void parseCommand (CommandT c) {
   EventT event;
   switch (toupper(c.cmd)) {
-    case 'G':
+    case 'G': //gain and trim voltage
       setGain((uint8_t) c.data[0]);
+      setTrimVoltage(c.data[1]);
       return;
     case 'C':
       if (c.us <= getTime()) {
@@ -902,7 +870,7 @@ void parseCommand (CommandT c) {
       enableDataTransmission = c.data[0] > 0;
       enableADCTransmission = ((byte) c.data[0]) & ((byte) 1);
       enableMagTransmission = ((byte) c.data[0]) & ((byte) 2);
-      enableAccTransmission = ((byte) c.data[0]) & ((byte) 4);
+     // enableAccTransmission = ((byte) c.data[0]) & ((byte) 4);
       enableCoilTransmission = ((byte) c.data[0]) & ((byte) 8);
       return;
     case 'V':
@@ -912,21 +880,45 @@ void parseCommand (CommandT c) {
     case 'R':
       Serial.println(VERSION);
       return;
-    case 'Z':
-      zeroAccelerometer(c.data[0], c.data[1]);
-      return;
     case 'F':
-      autoFlash = c.data[0];
+      autoFlash = (FlashT) c.data[0];
+      return;
+    case 'X': //changed from S
+      sendSynchronization();
+      sendSynchronization();
+      return;
+    case 'Q':
+      resetQueuesAndTimers();
       return;
     case 'S':
-      sendSynchronization();
-      sendSynchronization();
+      saveConfiguration();
+      return;
+    case '?':
+      sendStatusMessage();
+      return;  
     default:
       setLedMessage(BAD_MSG, true);
 
   }
 }
 
+void sendStatusMessage() {
+  StaticJsonDocument<144> doc;
+
+  doc["pulseDuration"] = pulseDuration;
+  doc["pulsePhase"] = pulsePhase;
+  doc["hysteresis"] = hysteresis;
+  doc["trimVoltage"] = trimVoltage;
+  doc["autoFire"] = autoFire;
+  doc["retriggerDelay"] = retriggerDelay;
+  doc["gainSetting"] = gainSetting;
+  doc["hasMag"] = hasMag;
+  doc["autoFlash"] = (uint8_t) autoFlash;
+  if (serializeJson(doc, Serial) == 0) {
+    sendMessage("serialization failed", 0);
+    setLedMessage(PICO_ERROR, true);
+  }
+}
 
 
 int64_t eventCallback(alarm_id_t id, void *data) {
@@ -964,25 +956,6 @@ bool scheduleEvent(EventT event) {
   return (rv >= 0);
 }
 
-//
-//bool doEvent (EventT event) {
-//  //returns true if event is executed
-//  if (getTime() < event.us) {
-//    return false;
-//  }
-//  switch (event.action) {
-//    case SET_COIL:
-//      setCoil(event.data[0], event.data[1]);
-//      break;
-//    case SET_LED:
-//      setLED(event.data[0]);
-//      break;
-//    case SET_READY:
-//      setReadyForCrossing(event.data[0]);
-//      break;
-//  }
-//  return true;
-//}
 
 void sendMessage(String msg, int v) {
   if (enableDataTransmission) {
@@ -991,4 +964,110 @@ void sendMessage(String msg, int v) {
   if (verbosity >= v) {
     Serial.println(msg);
   }
+}
+
+void setTrimVoltage(float tv) {
+  trimVoltage = tv;
+}
+
+void resetQueuesAndTimers() {
+  
+  analogTransmitFifo.clear();
+  coilTransmitFifo.clear();
+  magTransmitFifo.clear();
+  commandStack.clear();
+  eventFifo.clear();
+  scratchEventStack.clear();
+  setCoil(0);
+  readyForCrossing = true;
+  eventCompleted = true;
+  
+  
+}
+
+
+
+void saveConfiguration () {
+  //adapted from arduinojson.org/v6/example/config
+  //and arduino-pico.readthedocs.io/en/latest/fs.hmtl
+  LittleFS.remove(configname);
+  File f = LittleFS.open(configname, "w");
+  if (!f) {
+    sendMessage("file creation failed", 0);
+    setLedMessage(PICO_ERROR, true);
+    return;
+  }
+
+ /*
+ {
+    "pulseDuration": 0.003,
+    "pulsePhase": 40,
+    "hysteresis": 0.01,
+    "trimVoltage": 0,
+    "autoFire": true,
+    "retriggerDelay": 0.25
+  }
+  arduinojson.org/v6/assistant says 48 bytes required
+  */
+  StaticJsonDocument<144> doc;
+
+  doc["pulseDuration"] = pulseDuration;
+  doc["pulsePhase"] = pulsePhase;
+  doc["hysteresis"] = hysteresis;
+  doc["trimVoltage"] = trimVoltage;
+  doc["autoFire"] = autoFire;
+  doc["retriggerDelay"] = retriggerDelay;
+  doc["autoFlash"] = (uint8_t) autoFlash;
+  doc["gainSetting"] = gainSetting;
+  if (serializeJson(doc, f) == 0) {
+    sendMessage("serialization failed", 0);
+    setLedMessage(PICO_ERROR, true);
+  }
+  f.close();  
+}
+
+
+int loadConfiguration () {
+  //adapted from arduinojson.org/v6/example/config
+  //and arduino-pico.readthedocs.io/en/latest/fs.hmtl
+  File f = LittleFS.open(configname, "r");
+  if (!f) {
+    sendMessage("file load failed", 0);
+    return 1;
+  }
+
+ /*
+ {
+    "pulseDuration": 0.003,
+    "pulsePhase": 40,
+    "hysteresis": 0.01,
+    "trimVoltage": 0,
+    "autoFire": true,
+    "retriggerDelay": 0.25
+  }
+  arduinojson.org/v6/assistant says 48 bytes required
+  */
+  StaticJsonDocument<192> doc;
+
+  DeserializationError error = deserializeJson(doc, f);
+  if (error) {
+     sendMessage("deserialization failed", 0);
+     setLedMessage(PICO_ERROR, true);
+     return 2;
+  }
+  pulseDuration = doc["pulseDuration"] | pulseDuration;
+  pulsePhase = doc["pulsePhase"] | pulsePhase;
+  hysteresis = doc["hysteresis"] | hysteresis;
+  trimVoltage = doc["trimVoltage"] | trimVoltage;
+  autoFire = doc["autoFire"] | autoFire;
+  retriggerDelay = doc["retriggerDelay"] | retriggerDelay;
+  autoFlash = (FlashT) (doc["autoFlash"] | autoFlash);
+  gainSetting = doc["gainSetting"] | gainSetting;
+  sendMessage("loaded configuration", 1);
+  if (verbosity > 1) {
+    serializeJson(doc, Serial);
+  }
+
+  f.close();  
+  return 0;
 }
