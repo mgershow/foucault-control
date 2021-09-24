@@ -40,7 +40,7 @@ typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
 typedef enum {SYNC, DETVAL, COILI, MAGVEC, ACCVEC} TransmitTypeT;
 
-typedef enum {BAD_MSG,PICO_ERROR,  AUTO_ON, READY_FOR_CROSSING, COIL_ON, LED_ON, TRANSMIT_SERIAL, WATCHDOG_REBOOT} LedMessageTypeT;
+typedef enum {MAG_WORKS,PICO_ERROR,  AUTO_ON, READY_FOR_CROSSING, BAD_MSG, LED_ON, TRANSMIT_SERIAL, WATCHDOG_REBOOT} LedMessageTypeT;
 
 typedef struct {
   uint64_t us;
@@ -350,7 +350,7 @@ void setCoil(bool activate, float duration = -1) {
   if (autoFlash == FIRE) {
     setLED(coilState ? 255 : 0);
   }
-  setLedMessage(COIL_ON, activate);
+//  setLedMessage(COIL_ON, activate);
 }
 
 void setLED (uint8_t level) {
@@ -413,6 +413,7 @@ void setupMAG() {
       lis3mdl.setOperationMode(lis3mdl_operationmode_t::LIS3MDL_CONTINUOUSMODE);
     }
   }
+  setLedMessage(MAG_WORKS, hasMag);
 }
 
 
@@ -606,7 +607,7 @@ void pollMAG(void) {
   sensors_event_t event;
 
   if (hasMag) {
-    lis3mdl.getEvent(&event);
+    setLedMessage(MAG_WORKS, lis3mdl.getEvent(&event));
     reading.x = event.magnetic.x;
     reading.y = -event.magnetic.y; //lis3mdl is reversed from lis2mdl (or at least board is), so left handed when facing down
     reading.z = event.magnetic.z;
