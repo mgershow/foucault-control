@@ -26,6 +26,9 @@
 		<Item Name="Control Panel" Type="Folder" URL="../Control Panel">
 			<Property Name="NI.DISK" Type="Bool">true</Property>
 		</Item>
+		<Item Name="popup panels" Type="Folder" URL="../popup panels">
+			<Property Name="NI.DISK" Type="Bool">true</Property>
+		</Item>
 		<Item Name="Serial communication" Type="Folder" URL="../Serial communication">
 			<Property Name="NI.DISK" Type="Bool">true</Property>
 		</Item>
@@ -35,15 +38,7 @@
 		<Item Name="voltage analysis" Type="Folder" URL="../voltage analysis">
 			<Property Name="NI.DISK" Type="Bool">true</Property>
 		</Item>
-		<Item Name="close panels.vi" Type="VI" URL="../popup panels/close panels.vi"/>
-		<Item Name="control panel globals.vi" Type="VI" URL="../popup panels/control panel globals.vi"/>
-		<Item Name="crossing counter panel.vi" Type="VI" URL="../popup panels/crossing counter panel.vi"/>
-		<Item Name="Energy and amplitude panel.vi" Type="VI" URL="../popup panels/Energy and amplitude panel.vi"/>
-		<Item Name="file control panel.vi" Type="VI" URL="../popup panels/file control panel.vi"/>
 		<Item Name="foucault control panel.vi" Type="VI" URL="../foucault control panel.vi"/>
-		<Item Name="orbit and angle panel.vi" Type="VI" URL="../popup panels/orbit and angle panel.vi"/>
-		<Item Name="pulse optimization panel.vi" Type="VI" URL="../popup panels/pulse optimization panel.vi"/>
-		<Item Name="start panels.vi" Type="VI" URL="../popup panels/start panels.vi"/>
 		<Item Name="Dependencies" Type="Dependencies">
 			<Item Name="vi.lib" Type="Folder">
 				<Item Name="BuildHelpPath.vi" Type="VI" URL="/&lt;vilib&gt;/Utility/error.llb/BuildHelpPath.vi"/>
