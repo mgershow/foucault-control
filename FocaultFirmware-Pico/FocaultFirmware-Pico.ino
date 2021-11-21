@@ -18,7 +18,7 @@
 #define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
 
-#define VERSION 7
+#define VERSION 8
 
 
 Adafruit_LIS3MDL lis3mdl = Adafruit_LIS3MDL();
@@ -87,6 +87,7 @@ CircularBuffer<CommandT, 200> commandStack;
 CircularBuffer<EventT, 1000> eventFifo;
 CircularBuffer<EventT, 1000> scratchEventStack;
 
+CircularBuffer<Reading1T, 100> crossingEstimatorFifo;
 
 
 /**************** PIN CONFIGURATIONS  ***************************/
@@ -144,10 +145,11 @@ volatile bool hasMag = false;
 
 volatile bool coilState;
 
-float halfPeriod;
+float period;
 
 
 crossingT lastCrossing;
+crossingT twoCrossings;
 
 bool restarted = true;
 
@@ -522,6 +524,7 @@ void pollADC (void) {
       lastHigh = lastReading;
       if ((hysteresis) < 0) {
         retrigger = true;
+        crossingEstimatorFifo.clear();
       }
     }
     if (lastReading.val < 0) {
@@ -529,9 +532,16 @@ void pollADC (void) {
       lastLow = lastReading;
       if ((hysteresis) > 0) {
         retrigger = true;
+        crossingEstimatorFifo.clear();
       }
     }
   }
+
+  if (retrigger && abs(lastReading.val) < abs(hysteresis)) {
+    crossingEstimatorFifo.push(lastReading);
+  }
+
+  
 
   setLedMessage(AUTO_ON, autoFire);
 
@@ -539,20 +549,21 @@ void pollADC (void) {
 
   if ( retrigger && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) {
 
-    float dt = lastLow.us - lastHigh.us;
-    float tm = 0.5 * lastLow.us + 0.5 * lastHigh.us;
-    float dv = lastLow.val - lastHigh.val;
-    float vm = 0.5 * (lastLow.val + lastHigh.val);
-    crossingT crossing;
-    crossing.us = tm - dv / dt * vm;
-    crossing.slope = mega * dv / dt;
-    halfPeriod = crossing.us - lastCrossing.us;
+//    float dt = lastLow.us - lastHigh.us;
+//    float tm = 0.5 * lastLow.us + 0.5 * lastHigh.us;
+//    float dv = lastLow.val - lastHigh.val;
+//    float vm = 0.5 * (lastLow.val + lastHigh.val);
+    crossingT crossing = calculateCrossing();
+//    crossing.us = tm - dv / dt * vm;
+//    crossing.slope = mega * dv / dt;
+    period = crossing.us - twoCrossings.us;
     if (!enableDataTransmission) {
-      sendMessage("crossing at " + String(crossing.us * micro) + " slope = " + String(crossing.slope) + " halfPeriod = " + String(halfPeriod * micro), 1);
+      sendMessage("crossing at " + String(crossing.us * micro) + " slope = " + String(crossing.slope) + " period = " + String(period * micro), 1);
     }
-    if (autoFire && halfPeriod < 4 * mega) {
-      setFiringAction(toTimeStamp(crossing.us + halfPeriod * pulsePhase / 180 - pulseDuration*mega/2));
+    if (autoFire && period < 8 * mega) {
+      setFiringAction(toTimeStamp(crossing.us + period * pulsePhase / 360 - pulseDuration*mega/2));
     }
+    twoCrossings = lastCrossing;
     lastCrossing = crossing;
     retrigger = false;
     if (autoFlash == CROSS) {
@@ -561,6 +572,30 @@ void pollADC (void) {
     }
   }
 
+}
+
+crossingT calculateCrossing() {
+  //find t = mv + b -- intercept is crossing location: 1/m is the dv/dt slope
+  crossingT crossing;
+  int n = crossingEstimatorFifo.size();
+  float xx = 0, xy = 0, x = 0, y = 0;
+  float t,v,m,b,d;
+  uint64_t t0 = crossingEstimatorFifo[0].us;
+  while(!crossingEstimatorFifo.isEmpty()){
+    Reading1T r= crossingEstimatorFifo.pop();
+    t = (float) (r.us - t0);
+    v = r.val;
+    xx += v*v;
+    y += t;
+    x += v;
+    xy += v*t;
+  }
+  d = (n*xx - x*x);
+  b = (xx*y - x*xy)/d;
+  crossing.us = (uint64_t) (b + t0); 
+  //m = (n*xy - x*y)/d;
+  crossing.slope = d/(n*xy - x*y); //dv/dt 
+  return crossing;
 }
 
 /*
