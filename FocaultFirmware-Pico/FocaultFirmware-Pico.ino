@@ -18,7 +18,7 @@
 #define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
 
-#define VERSION 8
+#define VERSION 9
 
 
 Adafruit_LIS3MDL lis3mdl = Adafruit_LIS3MDL();
@@ -29,6 +29,7 @@ bool enableADCTransmission = true;
 bool enableMagTransmission = true;
 bool enableAccTransmission = true;
 bool enableCoilTransmission = true;
+bool enableCrossingTransmission = true;
 
 typedef enum {NONE, FIRE, CROSS} FlashT;
 FlashT autoFlash = NONE;
@@ -38,7 +39,7 @@ typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
 //typedef enum {NONE, DETVAL, MAGX, MAGY, MAGZ, ACCX, ACCY, ACCZ, COIL} TransmitTypeT;
 
-typedef enum {SYNC, DETVAL, COILI, MAGVEC, ACCVEC} TransmitTypeT;
+typedef enum {SYNC, DETVAL, COILI, MAGVEC, ACCVEC, CROSSING} TransmitTypeT;
 
 typedef enum {MAG_WORKS,PICO_ERROR,  AUTO_ON, READY_FOR_CROSSING, BAD_MSG, LED_ON, TRANSMIT_SERIAL, WATCHDOG_REBOOT} LedMessageTypeT;
 
@@ -64,9 +65,10 @@ typedef struct {
 typedef struct {
   uint64_t us;
   float slope;
-  // float xmag;
-  // float ymag;
+  float counter;
+  float targetTime;
 } crossingT;
+
 
 
 typedef struct {
@@ -81,6 +83,8 @@ CircularBuffer<Reading1T, 1000> analogTransmitFifo;
 CircularBuffer<Reading3T, 500> coilTransmitFifo;
 
 CircularBuffer<Reading3T, 500> magTransmitFifo;
+
+CircularBuffer<Reading3T, 10> crossingTransmitFifo;
 
 CircularBuffer<CommandT, 200> commandStack;
 
@@ -148,8 +152,8 @@ volatile bool coilState;
 float period;
 
 
-crossingT lastCrossing;
-crossingT twoCrossings;
+crossingT lastCrossing= {0,0,0,0};
+crossingT twoCrossings = {0,0,0,0};
 
 bool restarted = true;
 
@@ -331,6 +335,7 @@ void setup() {
   LittleFS.begin();
   delay(5000);
   watchdog_enable(5000, 1); 
+  resetQueuesAndTimers();
 
 }
 
@@ -503,6 +508,11 @@ uint8_t newDetector() {
   
 }
 
+Reading3T crossingToReading(crossingT c) {
+   Reading3T r = {c.us, c.slope, c.counter, c.targetTime};
+   return r;
+}
+
 void pollADC (void) {
 
   uint8_t whichread = 0;
@@ -554,6 +564,7 @@ void pollADC (void) {
 //    float dv = lastLow.val - lastHigh.val;
 //    float vm = 0.5 * (lastLow.val + lastHigh.val);
     crossingT crossing = calculateCrossing();
+    crossing.counter = lastCrossing.counter + 1;
 //    crossing.us = tm - dv / dt * vm;
 //    crossing.slope = mega * dv / dt;
     period = crossing.us - twoCrossings.us;
@@ -561,8 +572,10 @@ void pollADC (void) {
       sendMessage("crossing at " + String(crossing.us * micro) + " slope = " + String(crossing.slope) + " period = " + String(period * micro), 1);
     }
     if (autoFire && period < 8 * mega) {
-      setFiringAction(toTimeStamp(crossing.us + period * pulsePhase / 360 - pulseDuration*mega/2));
+      crossing.targetTime = crossing.us + period * pulsePhase / 360 - pulseDuration*mega/2;
+      setFiringAction(toTimeStamp(crossing.targetTime));
     }
+    crossingTransmitFifo.push(crossingToReading(crossing));
     twoCrossings = lastCrossing;
     lastCrossing = crossing;
     retrigger = false;
@@ -576,7 +589,7 @@ void pollADC (void) {
 
 crossingT calculateCrossing() {
   //find t = mv + b -- intercept is crossing location: 1/m is the dv/dt slope
-  crossingT crossing;
+  crossingT crossing = {0,0,0,0};
   int n = crossingEstimatorFifo.size();
   float xx = 0, xy = 0, x = 0, y = 0;
   float t,v,m,b,d;
@@ -594,7 +607,7 @@ crossingT calculateCrossing() {
   b = (xx*y - x*xy)/d;
   crossing.us = (uint64_t) (b + t0); 
   //m = (n*xy - x*y)/d;
-  crossing.slope = d/(n*xy - x*y); //dv/dt 
+  crossing.slope = mega*d/(n*xy - x*y); //dv/dt in volts / second
   return crossing;
 }
 
@@ -660,6 +673,17 @@ void pollTransmit() {
       sendSynchronization();
     }
     wastransmit = enableDataTransmission;
+
+    if (!crossingTransmitFifo.isEmpty()) {
+      
+      setLedMessage(TRANSMIT_SERIAL, true);
+      if (enableCrossingTransmission) {
+        sendReading(crossingTransmitFifo.pop(), CROSSING);
+      } else {
+        crossingTransmitFifo.pop();
+      }
+    }
+    
     if (!analogTransmitFifo.isEmpty()) {
       setLedMessage(TRANSMIT_SERIAL, true);
       if (enableADCTransmission) {
@@ -891,11 +915,11 @@ void parseCommand (CommandT c) {
       }
       return;
     case 'A':
+      pulseDuration = c.data[0];
+      pulsePhase = c.data[1];
+      hysteresis = c.data[2];
       if (c.data[0] > 0) {
         autoFire = true;
-        pulseDuration = c.data[0];
-        pulsePhase = c.data[1];
-        hysteresis = c.data[2];
         sendMessage("auto enabled", 1);
       } else {
         autoFire = false;
@@ -908,6 +932,7 @@ void parseCommand (CommandT c) {
       enableMagTransmission = ((byte) c.data[0]) & ((byte) 2);
      // enableAccTransmission = ((byte) c.data[0]) & ((byte) 4);
       enableCoilTransmission = ((byte) c.data[0]) & ((byte) 8);
+      enableCrossingTransmission = ((byte) c.data[0]) & ((byte) 16);
       return;
     case 'V':
       verbosity = c.data[0];
@@ -1011,6 +1036,7 @@ void resetQueuesAndTimers() {
   analogTransmitFifo.clear();
   coilTransmitFifo.clear();
   magTransmitFifo.clear();
+  crossingTransmitFifo.clear();
   commandStack.clear();
   eventFifo.clear();
   scratchEventStack.clear();
