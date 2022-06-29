@@ -1,7 +1,5 @@
 #include "pico/stdlib.h"
 #include <CircularBuffer.h>
-#include <Adafruit_LIS3MDL.h>
-#include <Adafruit_Sensor.h>
 #include <Wire.h>
 #include <EEPROM.h>
 #include <elapsedMillis.h>
@@ -11,6 +9,11 @@
 #include <ArduinoJson.h>
 #include "LittleFS.h"
 
+#include <MHG_MMC5603NJ_Array.h>
+#include <MHG_MMC5603NJ_Arduino_Library.h>
+#include <MHG_MMC5603NJ_Arduino_Library_Constants.h>
+#include <MHG_MMC5603NJ_IO.h>
+
 #define mega 1000000.f
 #define micro 0.000001f
 
@@ -18,10 +21,10 @@
 #define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
 
-#define VERSION 9
+#define VERSION 10
 
 
-Adafruit_LIS3MDL lis3mdl = Adafruit_LIS3MDL();
+MHG_MMC5603NJ_Array mmcarr = MHG_MMC5603NJ_Array(); 
 
 
 bool enableDataTransmission = false;
@@ -39,7 +42,7 @@ typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
 //typedef enum {NONE, DETVAL, MAGX, MAGY, MAGZ, ACCX, ACCY, ACCZ, COIL} TransmitTypeT;
 
-typedef enum {SYNC, DETVAL, COILI, MAGVEC, ACCVEC, CROSSING} TransmitTypeT;
+typedef enum {SYNC, DETVAL, COILI, MAGVEC, ACCVEC, CROSSING, MAG0, MAG1, MAG2, MAG3, MAG4, MAG5, MAG6, MAG7} TransmitTypeT;
 
 typedef enum {MAG_WORKS,PICO_ERROR,  AUTO_ON, READY_FOR_CROSSING, BAD_MSG, LED_ON, TRANSMIT_SERIAL, WATCHDOG_REBOOT} LedMessageTypeT;
 
@@ -54,6 +57,8 @@ typedef struct {
   float y;
   float z;
 } Reading3T;
+
+
 
 typedef struct {
   char cmd;
@@ -82,7 +87,7 @@ CircularBuffer<Reading1T, 1000> analogTransmitFifo;
 
 CircularBuffer<Reading3T, 500> coilTransmitFifo;
 
-CircularBuffer<Reading3T, 500> magTransmitFifo;
+CircularBuffer<multiMagMeasurementT, 500> magTransmitFifo;
 
 CircularBuffer<Reading3T, 10> crossingTransmitFifo;
 
@@ -95,15 +100,26 @@ CircularBuffer<Reading1T, 100> crossingEstimatorFifo;
 
 
 /**************** PIN CONFIGURATIONS  ***************************/
-/********** REVISED FOR PICO 2021 BOARD *****************************/
+/********** REVISED FOR PICO 2022 BOARD *****************************/
 
 const int actCoilPin = 9;
-const int actLEDPin = 8;
+const int actLEDPin = 10;
 const int gainSet0 = 6;
 const int gainSet1 = 7;
+const int gainSet2 = 8;
+
+const int i2cSel0 = 1;
+const int i2cSel1 = 2;
+const int i2cSel2 = 3;
+
+const int sda0Pin = 4;
+const int scl0Pin = 5;
+
 
 const int scl1Pin = 15;
 const int sda1Pin = 14;
+
+const int resetIntegratorPin = 0;
 
 const int detectorPin = A2;
 const int refPin = A1;
@@ -195,6 +211,8 @@ uint64_t setLowerHalf (uint64_t val, uint32_t newlow) {
   return val;
 }
 
+static bool readDetector = true;
+
 void analogReadFunctionCore1 (void) {
 
   /*     analogReadInternals
@@ -209,9 +227,9 @@ void analogReadFunctionCore1 (void) {
   static uint32_t microtime;
   static uint16_t numreads = 0;
   static bool coilActive = false;
-  static bool readDetector = true;
   static int coilCountdown = 5;
   if (numreads == numADCToAvg) {
+  
     rp2040.fifo.push(microtime);
     rp2040.fifo.push((uint32_t) readDetector);
     rp2040.fifo.push(readDetector ? vdetaccum : vcurraccum);
@@ -221,7 +239,7 @@ void analogReadFunctionCore1 (void) {
     vrefaccum = 0;
     vcurraccum = 0;
     numreads = 0;
-    //keep reading the coil for 10 more cycles, approx 5 ms, to get all current integrated and suppress detector feedthrough
+    //after coil turns off, read the integral of the current for 10 more cycles, approx 5 ms, to get all current integrated and suppress detector feedthrough
     if (coilActive) {
       coilCountdown = 10;
     } else {
@@ -229,6 +247,7 @@ void analogReadFunctionCore1 (void) {
         --coilCountdown;
       }else {
         readDetector = true;
+        digitalWrite(resetIntegratorPin, HIGH); //done reading current integral, so reset the integrator
       }
     }
   //  readDetector = !coilActive; //transition to reading detector after transmitting data - ensures coil voltage is not fed through
@@ -248,7 +267,6 @@ void analogReadFunctionCore1 (void) {
       readDetector = false; 
     }
   
-  ++numreads;
   if (numreads == numADCToAvg >> 1) {
     microtime = getLow(getTime());
   }
@@ -257,9 +275,14 @@ void analogReadFunctionCore1 (void) {
     vdetaccum += adc_read();
     adc_select_input(refPin - A0);
     vrefaccum += adc_read();
+    ++numreads;
+
   } else {
-    adc_select_input(coilIPin - A0);
-    vcurraccum += adc_read();
+    if (!coilActive) { //wait until coil turns off to start reading integrator
+      adc_select_input(coilIPin - A0);
+      vcurraccum += adc_read();
+      ++numreads;
+    }
   }
 
   
@@ -278,6 +301,7 @@ void setup1 (void) {
 
 void loop1(void) {
   analogReadFunctionCore1();
+  pollMAG();
 }
 
 /********************  core0 all others ********************************/
@@ -311,6 +335,10 @@ void setup() {
   setGain(0);
 
 
+  Wire.setSDA(sda0Pin);
+  Wire.setSCL(scl0Pin);
+  Wire.setClock(400000);
+  Wire.begin();
   
   setupMAG();
 
@@ -346,6 +374,9 @@ void setup() {
 
 void setCoil(bool activate, float duration = -1) {
   coilState = activate;
+  if (activate) {
+    digitalWrite(resetIntegratorPin, LOW); //start integration
+  }
   rp2040.fifo.push_nb((uint32_t) activate); //tell ADC loop that coil is on
   digitalWrite(actCoilPin, activate);
   if (duration > 0) {
@@ -369,6 +400,7 @@ void setLED (uint8_t level) {
 void setGain(byte g) {
   digitalWrite(gainSet0, bitRead(g, 0));
   digitalWrite(gainSet1, bitRead(g, 1));
+  digitalWrite(gainSet2, bitRead(g,2));
   gainSetting = g;
 }
 
@@ -386,7 +418,6 @@ void setLedMessage (LedMessageTypeT msg, bool setting) {
     digitalWrite(25, setting);
   }
   digitalWrite(indicatorPins[msg], setting);
-  return; //no leds on current board
   
 }
 
@@ -397,11 +428,20 @@ void setupPins() {
   //enable pullups for i2c - these are present on board, but this is a belt/suspenders approach
   pinMode(scl1Pin, INPUT_PULLUP);
   pinMode(sda1Pin, INPUT_PULLUP);
+  pinMode(scl0Pin, INPUT_PULLUP);
+  pinMode(sda0Pin, INPUT_PULLUP);
+  
   
   pinMode(gainSet0, OUTPUT);
   pinMode(gainSet1, OUTPUT);
+  pinMode(gainSet2, OUTPUT);
+  pinMode(i2cSel0, OUTPUT);
+  pinMode(i2cSel1, OUTPUT);
+  pinMode(i2cSel2, OUTPUT);
+  
   pinMode(actCoilPin, OUTPUT);
   pinMode(actLEDPin, OUTPUT);
+  pinMode(resetIntegratorPin, OUTPUT);
 
   for (int j = 0; j < 8; ++j) {
     pinMode(indicatorPins[j], OUTPUT);
@@ -413,11 +453,11 @@ void setupPins() {
 void setupMAG() {
 
   if (!hasMag) {
-    hasMag = lis3mdl.begin_I2C(LIS3MDL_I2CADDR_DEFAULT, &Wire1);
+    hasMag = mmcarr.begin(Wire,8);
     if (hasMag) {
-      lis3mdl.setRange(lis3mdl_range_t::LIS3MDL_RANGE_16_GAUSS);
-      lis3mdl.setDataRate(lis3mdl_dataRate_t::LIS3MDL_DATARATE_300_HZ);
-      lis3mdl.setOperationMode(lis3mdl_operationmode_t::LIS3MDL_CONTINUOUSMODE);
+      mmcarr.enableAutomaticSetReset();
+      mmcarr.performSetOperation();
+      mmcarr.performResetOperation();
     }
   }
   setLedMessage(MAG_WORKS, hasMag);
@@ -444,9 +484,9 @@ void loop() {
   pollEvent();
 
   pollADC();
-  pollMAG();
   pollTransmit();
   pollSerial();
+  //pollMag moved to loop1
 
 }
 
@@ -458,6 +498,7 @@ void setReadyForCrossing(bool r) {
 
 bool retrigger = false;
 
+//needs redo?
 uint8_t newDetector() {
   if (rp2040.fifo.available() < 4) {
     return 0;
@@ -629,42 +670,18 @@ bool timePassed (uint64_t targetTime) {
 }
 
 
-bool newMAG(void) {
-  static absolute_time_t nextReading = make_timeout_time_us(magPeriod);
-  if (!timePassed(nextReading)) {
-    return false;
-  }
-  if (hasMag) {
-    if (!lis3mdl.magneticFieldAvailable()) {
-      return false;
-    }
-  }
-  while (timePassed(nextReading)) {
-    nextReading = delayed_by_us(nextReading, magPeriod);
-  }
-  return true;
-  
-}
-
 void pollMAG(void) {
-  if (!newMAG()) {
-    return;
-  }
-  Reading3T reading;
-  reading.us = getTime();
-  sensors_event_t event;
-
-  if (hasMag) {
-    setLedMessage(MAG_WORKS, lis3mdl.getEvent(&event));
-    reading.x = event.magnetic.x;
-    reading.y = -event.magnetic.y; //lis3mdl is reversed from lis2mdl (or at least board is), so left handed when facing down
-    reading.z = event.magnetic.z;
-    if (enableDataTransmission) {
-      magTransmitFifo.unshift(reading);
+  bool dataready;
+  multiMagMeasurementT measurement;
+  if (readDetector) { //don't read magnetometer when coil is energized
+    mmcarr.measurementCycle(getTime(), dataready, measurement);
+    if (dataready) {
+      //todo: semaphore/mutex if running on core 1
+        magTransmitFifo.unshift(measurement);
     }
   }
-
 }
+
 
 
 void pollTransmit() {
@@ -800,6 +817,17 @@ void sendReading (Reading3T reading, TransmitTypeT t) {
   sendBinaryData ((uint8_t) t, reading.us, data);
 }
 
+void sendReading (multiMagMeasurementT reading, TransmitTypeT t) {
+  float data[3];
+  static const TransmitTypeT magtype[8] = {MAG0, MAG1, MAG2, MAG3, MAG4, MAG5, MAG6, MAG7};
+  for (int j = 0; j < MAX_SENSORS; ++j) {
+    data[0] = reading.x[j];
+    data[1] = reading.y[j];
+    data[2] = reading.z[j];
+    sendBinaryData (magtype[j], reading.us, data);
+  }
+}
+
 
 void sendBinaryData(uint8_t ttype, uint64_t us, float data[]) {
   //ttype is type of transmission
@@ -813,7 +841,7 @@ void sendBinaryData(uint8_t ttype, uint64_t us, float data[]) {
   tbuff[0] = ttype;
   memcpy(tbuff + 1, ((uint8_t *) &us), 6); //raspberry pi pico stores data little-endian (lsb first)
   memcpy(tbuff + 7, ((uint8_t *) data), 12);
-  tbuff[19] = 0;
+  tbuff[19] = 0; //checksum
   for (int j = 0; j < 19; ++j) {
     tbuff[19] = tbuff[19] ^ tbuff[j];
   }
