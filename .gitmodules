@@ -1,0 +1,3 @@
+[submodule "FocaultFirmware-Pico/MMC5603NJ"]
+	path = FocaultFirmware-Pico/MMC5603NJ
+	url = https://github.com/mgershow/MMC5603NJ.git

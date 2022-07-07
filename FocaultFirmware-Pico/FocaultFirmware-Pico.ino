@@ -876,7 +876,7 @@ int readLineSerial(char buff[], int buffersize, unsigned int timeout) {
 void processSerialLine() {
   char buff[CHAR_BUF_SIZE];
   int rv;
-  rv = readLineSerial(buff, CHAR_BUF_SIZE, 500);
+  rv = readLineSerial(buff, CHAR_BUF_SIZE, 500); //changed from 500 to 500k for debugging
   if (rv < 0) {
     sendMessage("line reading failed", 1);
     setLedMessage(BAD_MSG, true);
