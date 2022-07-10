@@ -26,6 +26,9 @@
 		<Item Name="Control Panel" Type="Folder" URL="../Control Panel">
 			<Property Name="NI.DISK" Type="Bool">true</Property>
 		</Item>
+		<Item Name="multi-magnetometer fitting" Type="Folder" URL="../multi-magnetometer fitting">
+			<Property Name="NI.DISK" Type="Bool">true</Property>
+		</Item>
 		<Item Name="popup panels" Type="Folder" URL="../popup panels">
 			<Property Name="NI.DISK" Type="Bool">true</Property>
 		</Item>
