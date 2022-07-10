@@ -288,21 +288,7 @@ void analogReadFunctionCore1 (void) {
   
   
 }
-//
-void setup1 (void) {
 
-  delay(5000);
-  adc_init();
-  adc_gpio_init(detectorPin);
-  adc_gpio_init(refPin);
-  adc_gpio_init(coilIPin);
-  
-}
-
-void loop1(void) {
-  analogReadFunctionCore1();
-  pollMAG();
-}
 
 /********************  core0 all others ********************************/
 
@@ -314,25 +300,11 @@ void setup() {
   setLedMessage(WATCHDOG_REBOOT, watchdog_caused_reboot());
  
   Serial.begin(9600);
-  elapsedMillis serialWait;
-  while (!Serial && serialWait < 5000) {
+  while (!Serial) {
     delay(100);
   }
-  LittleFS.begin();
-  if (loadConfiguration()) {
-    //error loading configuration, save defaults
-    saveConfiguration();
-  }
-  int j = 0;
 
   setLED(255);
-
-
-
-  Wire1.setSDA(sda1Pin);
-  Wire1.setSCL(scl1Pin);  
-  Wire1.begin();
-  setGain(0);
 
 
   Wire.setSDA(sda0Pin);
@@ -343,27 +315,6 @@ void setup() {
   setupMAG();
 
 
-
-  if (hardware_alarm_is_claimed(coil_alarm_num)) {
-    sendMessage("hardware coil alarm is claimed!!!!", 0);
-    setLedMessage(PICO_ERROR, true);
-    watchdog_reboot (0,0,1000);
-  }else {
-    hardware_alarm_claim(coil_alarm_num);
-    hardware_alarm_set_callback(coil_alarm_num, toggleCoil_isr);
-  }
-
-  sendMessage("setup complete", 1);
-  byte g = readGain();
-  sendMessage("gain = " + String(g), 1);
-
-  if (enableDataTransmission) {
-    verbosity = -1;
-  }
-  LittleFS.begin();
-  delay(5000);
-  watchdog_enable(5000, 1); 
-  resetQueuesAndTimers();
 
 }
 
@@ -480,13 +431,23 @@ void toggleCoil_isr(uint alarm_num) {
 elapsedMillis loopT;
 int ctr = 0;
 void loop() {
-  watchdog_update();
-  pollEvent();
-
-  pollADC();
-  pollTransmit();
-  pollSerial();
-  //pollMag moved to loop1
+  for (int j = 0; j < 8; ++j) {
+    Serial.print("Sensor ");
+    Serial.print(j);
+    Serial.println(mmcarr.isSensorConnected(j) ? " is connected" : " is not connected");
+    Serial.print("Sensor ");
+    Serial.print(j);
+    Serial.println(mmcarr.isSensorActive(j) ? " passed self-test" : " failed self-test or connection");
+  }
+  while (!(Serial.available() > 0)) {
+    delay(100);
+  }
+  while (Serial.available() > 0) {
+    Serial.read();
+  }
+  Serial.println("reinitializing");
+  mmcarr.reinitialize();
+  delay(10);
 
 }
 
@@ -746,9 +707,6 @@ void pollEvent() {
 
 
 void pollSerial() {
-  if (!Serial) {
-    return;
-  }
   processSerialLine();
 }
 
@@ -854,9 +812,6 @@ void sendBinaryData(uint8_t ttype, uint64_t us, float data[]) {
 
 int readLineSerial(char buff[], int buffersize, unsigned int timeout) {
   int i = 0;
-  if (!Serial) {
-    return 0;
-  }
   if (!Serial.available()) {
     return 0;
   }
