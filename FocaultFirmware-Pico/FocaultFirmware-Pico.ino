@@ -820,14 +820,16 @@ void sendReading (Reading3T reading, TransmitTypeT t) {
   sendBinaryData ((uint8_t) t, reading.us, data);
 }
 
-void sendReading (multiMagMeasurementT reading, TransmitTypeT t) {
+void sendReading (const multiMagMeasurementT &reading, TransmitTypeT t) {
   float data[3];
   static const TransmitTypeT magtype[8] = {MAG0, MAG1, MAG2, MAG3, MAG4, MAG5, MAG6, MAG7};
   for (int j = 0; j < MAX_SENSORS; ++j) {
-    data[0] = reading.x[j];
-    data[1] = reading.y[j];
-    data[2] = reading.z[j];
-    sendBinaryData (magtype[j], reading.us, data);
+    if (reading.sensorOnline[j]) {
+      data[0] = reading.x[j];
+      data[1] = reading.y[j];
+      data[2] = reading.z[j];
+      sendBinaryData (magtype[j], reading.us, data);
+    }
   }
 }
 

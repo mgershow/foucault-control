@@ -6,12 +6,16 @@ Created on Thu Jul  7 15:55:13 2022
 @author: gershow
 """
 import serial
+import serial.tools.list_ports
 import time
 import struct
 from enum import Enum
 import numpy as np
 from scipy import linalg
 import matplotlib.pyplot as plt
+
+
+TARGET_VERSION = 10
 
 class ReadingType(Enum):
     INVALID= -1
@@ -81,29 +85,40 @@ class MagReading:
     def __init__(self, readings):
         self.readingTime = 0
         self.mag = np.zeros([8,3])
+        self.valid = [False]*8
         for r in readings:
             if (r.valid and r.readingType >= ReadingType.MAGVEC0.value and r.readingType <= ReadingType.MAGVEC7.value):
                 self.readingTime = np.maximum(self.readingTime, r.readingTime)
-                self.mag[r.readingType-ReadingType.MAGVEC0.value,:] = [r.x,r.y,r.z];
+                ind = r.readingType-ReadingType.MAGVEC0.value
+                self.mag[ind,:] = [r.x,r.y,r.z];
+                self.valid[ind] = True
     
     
     def setAsOffset(self):
-        MagReading.offsetFields = self.mag
+        MagReading.offsetFields[self.valid,:] = self.mag
+    
+    def getMag(self):
+        return self.mag[self.valid,:] - self.offsetFields[self.valid,:]
+
+    def getPositions(self):
+        return self.sensorPositions[self.valid,:]
     
     def plotXY(self):
-        B = self.mag - self.offsetFields
-        x = self.sensorPositions[:,0]
-        y = self.sensorPositions[:,1]
-        u = B[:,0]
-        v = B[:,1]
+        u = self.getMag()[:,0]
+        v = self.getMag()[:,1]
+    
+        x = self.getPositions()[:,0]
+        y = self.getPositions()[:,1]
+       
         plt.quiver(x,y,u,v)
         plt.show()
 
     
     def estimateLocation(self):
         #hsieh et al 10.1109/AIM.2019.8868443
-        B = self.mag - self.offsetFields
-        cp = np.cross(B, self.sensorPositions)
+        B = self.getMag()
+        P = self.getPositions()
+        cp = np.cross(B, P)
         #P = self.sensorPositions
         R = np.hstack((B,cp)) #eq 7
         
@@ -116,17 +131,17 @@ class MagReading:
         H = v[3:] #eq 11
         r = v[0:3] #eq 12
         
-        c2 = np.zeros(self.sensorPositions.shape)
+        c2 = np.zeros(P.shape)
         c1 = np.copy(c2)
         c0 = np.copy(c2)
-        for j in range(self.sensorPositions.shape[0]):
-            P = self.sensorPositions[j,:]
-            HdP = np.dot(H,P)
+        for j in range(P.shape[0]):
+           # P = self.sensorPositions[j,:]
+            HdP = np.dot(H,P[j,:])
             rcH= np.cross(r,H)
             #eq 19
             g2 = 2*H
-            g1 = -3*P + 3*rcH-HdP*H
-            g0 = 3*HdP*(P-rcH) -(np.dot(P,P)+np.dot(r,r)-2*rcH)*H
+            g1 = -3*P[j,:] + 3*rcH-HdP*H
+            g0 = 3*HdP*(P[j,:]-rcH) -(np.dot(P[j,:],P[j,:])+np.dot(r,r)-2*rcH)*H
             #eq 25
             c2[j,:] = np.cross(g2,B[j,:])
             c1[j,:] = np.cross(g1,B[j,:])
@@ -195,38 +210,41 @@ def synchronize(ser):
 #         xs = xs ^ bb
 #     return dict (type=readingType,time=readingTime,x=x,y=y,z=z,valid= xs == 0)
 
-    
+
+def findPort():
+    port_list = serial.tools.list_ports.comports();
+    for p in port_list:
+        try:
+            arduino = serial.Serial(port=p.device, timeout = .1)
+            arduino.reset_input_buffer()         
+            sendCommand(arduino, 'T',0,[0 ,0, 0, 0])
+            time.sleep(0.1)
+            arduino.reset_input_buffer()
+            time.sleep(0.1)
+            arduino.reset_input_buffer()                
+            sendCommand(arduino, 'R')
+            time.sleep(0.1)
+            lineread = arduino.readline().decode();
+       #     print(lineread)
+            version = int(lineread.strip())
+       #     print ("version = {}".format(version))
+            if (version == TARGET_VERSION):
+                return arduino
+            if (version > TARGET_VERSION):
+                print ("hardware version {} is greater than software version {}. Update this software".format(version, TARGET_VERSION))
+                return arduino
+        except:
+            pass 
+
+        arduino.close()
+    print ("no valid devices found")
+    return 0
 
 def startup():
-    global arduino
-
+    
     print("opening serial port")
-    arduino = serial.Serial(port='/dev/cu.usbmodem1441', timeout = .1)
-    arduino.reset_input_buffer()
-       
-        
-    
-    
-    print("writing")
-    sendCommand(arduino, 'T',0,[0 ,0, 0, 0])
-    time.sleep(0.1)
-    print("available")
-    print(arduino.in_waiting)
-    arduino.reset_input_buffer()
-    time.sleep(0.1)
-    print("available")
-    print(arduino.in_waiting)
-    arduino.reset_input_buffer()
-    
-    print("writing")
-    
-    sendCommand(arduino, 'R')
-    print("available")
-    print(arduino.in_waiting)
-    time.sleep(0.1)
-    print("available")
-    print(arduino.in_waiting)
-    print(arduino.readline())
+    arduino = findPort()
+
     sendCommand(arduino, 'T',0,[2 ,0, 0, 0])#enable magnetometer
     time.sleep(0.1)
     
@@ -245,9 +263,9 @@ def startup():
     
     arduino.reset_input_buffer()
     print("magnetometer zeroed - ready to continue")
+    return arduino
 
-def grabReadings():
-    global arduino
+def grabReadings(arduino):
     sendCommand(arduino, 'T',0,[2 ,0, 0, 0])#enable magnetometer
     time.sleep(0.1)
     
