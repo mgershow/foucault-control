@@ -95,7 +95,7 @@ class MagReading:
     
     
     def setAsOffset(self):
-        MagReading.offsetFields[self.valid,:] = self.mag
+        MagReading.offsetFields[self.valid,:] = self.mag[self.valid,:]
     
     def getMag(self):
         return self.mag[self.valid,:] - self.offsetFields[self.valid,:]
@@ -106,11 +106,15 @@ class MagReading:
     def plotXY(self):
         u = self.getMag()[:,0]
         v = self.getMag()[:,1]
+        w = self.getMag()[:,2]
+        
+        n = np.sqrt(u**2 + v**2 + w**2);
+        
     
         x = self.getPositions()[:,0]
         y = self.getPositions()[:,1]
        
-        plt.quiver(x,y,u,v)
+        plt.quiver(x,y,u/n,v/n)
         plt.show()
 
     
@@ -225,20 +229,29 @@ def findPort():
             sendCommand(arduino, 'R')
             time.sleep(0.1)
             lineread = arduino.readline().decode();
-       #     print(lineread)
+            print(lineread)
             version = int(lineread.strip())
-       #     print ("version = {}".format(version))
+            print ("version = {}".format(version))
             if (version == TARGET_VERSION):
                 return arduino
             if (version > TARGET_VERSION):
                 print ("hardware version {} is greater than software version {}. Update this software".format(version, TARGET_VERSION))
                 return arduino
+        except Exception as e:
+            print(e)
+        try:
+            arduino.close()
         except:
-            pass 
-
-        arduino.close()
+            pass    
     print ("no valid devices found")
     return 0
+
+def clearBuffer(arduino):
+    sendCommand(arduino, 'T',0,[0 ,0, 0, 0])
+    time.sleep(0.05) 
+    arduino.reset_input_buffer()
+    time.sleep(0.05) 
+    arduino.reset_input_buffer()
 
 def startup():
     
@@ -283,6 +296,25 @@ def grabReadings(arduino):
     return (rr,nread)
     
 
+def repeatMeasurements(arduino):
+    clearBuffer(arduino)
+    
+    sendCommand(arduino, 'T',0,[0 ,0, 0, 0])
+    time.sleep(0.01)
+    
+    arduino.reset_input_buffer()
+    sendCommand(arduino, 'T',0,[2 ,0, 0, 0])
+    while True:
+        while(arduino.in_waiting < 160):
+            time.sleep(0.01)
+        (rr,nread) = Reading.fromSerial(arduino) 
+        
+        mr = MagReading(rr[-12:])
+        plt.clf()
+        mr.plotXY()
+        #(x,H) = mr.estimateLocation()
+        #print('location = {}, h = {}'.format(x, H))
+        plt.pause(0.1)
 
 # time.sleep(1)
 
