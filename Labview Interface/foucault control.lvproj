@@ -26,7 +26,13 @@
 		<Item Name="Control Panel" Type="Folder" URL="../Control Panel">
 			<Property Name="NI.DISK" Type="Bool">true</Property>
 		</Item>
+		<Item Name="multi-magnetometer fitting" Type="Folder" URL="../multi-magnetometer fitting">
+			<Property Name="NI.DISK" Type="Bool">true</Property>
+		</Item>
 		<Item Name="popup panels" Type="Folder" URL="../popup panels">
+			<Property Name="NI.DISK" Type="Bool">true</Property>
+		</Item>
+		<Item Name="revised magnetometer testing" Type="Folder" URL="../revised magnetometer testing">
 			<Property Name="NI.DISK" Type="Bool">true</Property>
 		</Item>
 		<Item Name="Serial communication" Type="Folder" URL="../Serial communication">
@@ -38,6 +44,7 @@
 		<Item Name="voltage analysis" Type="Folder" URL="../voltage analysis">
 			<Property Name="NI.DISK" Type="Bool">true</Property>
 		</Item>
+		<Item Name="fit from queues.vi" Type="VI" URL="../multi-magnetometer fitting/fit from queues.vi"/>
 		<Item Name="foucault control panel.vi" Type="VI" URL="../foucault control panel.vi"/>
 		<Item Name="Dependencies" Type="Dependencies">
 			<Item Name="vi.lib" Type="Folder">

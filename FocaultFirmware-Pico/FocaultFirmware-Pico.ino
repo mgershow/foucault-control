@@ -288,21 +288,21 @@ void analogReadFunctionCore1 (void) {
   
   
 }
+////
+//void setup1 (void) {
 //
-void setup1 (void) {
-
-  delay(5000);
-  adc_init();
-  adc_gpio_init(detectorPin);
-  adc_gpio_init(refPin);
-  adc_gpio_init(coilIPin);
-  
-}
-
-void loop1(void) {
-  analogReadFunctionCore1();
-  pollMAG();
-}
+//  delay(5000);
+//  adc_init();
+//  adc_gpio_init(detectorPin);
+//  adc_gpio_init(refPin);
+//  adc_gpio_init(coilIPin);
+//  
+//}
+//
+//void loop1(void) {
+//  //analogReadFunctionCore1();
+//  pollMAG();
+//}
 
 /********************  core0 all others ********************************/
 
@@ -312,10 +312,11 @@ void setup() {
   // put your setup code here, to run once:
   setupPins();
   setLedMessage(WATCHDOG_REBOOT, watchdog_caused_reboot());
- 
+  autoFire = false;
+  setLedMessage(AUTO_ON, false);
   Serial.begin(9600);
   elapsedMillis serialWait;
-  while (!Serial && serialWait < 5000) {
+  while (!Serial ) {
     delay(100);
   }
   LittleFS.begin();
@@ -362,7 +363,7 @@ void setup() {
   }
   LittleFS.begin();
   delay(5000);
-  watchdog_enable(5000, 1); 
+ // watchdog_enable(5000, 1); 
   resetQueuesAndTimers();
 
 }
@@ -454,11 +455,11 @@ void setupMAG() {
 
   if (!hasMag) {
     hasMag = mmcarr.begin(Wire,8);
-    if (hasMag) {
+   // if (hasMag) {
       mmcarr.enableAutomaticSetReset();
       mmcarr.performSetOperation();
       mmcarr.performResetOperation();
-    }
+    //}
   }
   setLedMessage(MAG_WORKS, hasMag);
 }
@@ -480,10 +481,11 @@ void toggleCoil_isr(uint alarm_num) {
 elapsedMillis loopT;
 int ctr = 0;
 void loop() {
-  watchdog_update();
-  pollEvent();
+ // watchdog_update();
+  //pollEvent();
 
-  pollADC();
+ // pollADC();
+  pollMAG();
   pollTransmit();
   pollSerial();
   //pollMag moved to loop1
@@ -673,11 +675,13 @@ bool timePassed (uint64_t targetTime) {
 void pollMAG(void) {
   bool dataready;
   multiMagMeasurementT measurement;
-  if (readDetector) { //don't read magnetometer when coil is energized
+  if (true) { //(readDetector) { //don't read magnetometer when coil is energized
     mmcarr.measurementCycle(getTime(), dataready, measurement);
     if (dataready) {
       //todo: semaphore/mutex if running on core 1
+        setLedMessage(MAG_WORKS, true);
         magTransmitFifo.unshift(measurement);
+        setLedMessage(MAG_WORKS, true);
     }
   }
 }
