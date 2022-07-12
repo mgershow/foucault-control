@@ -108,13 +108,16 @@ class MagReading:
         v = self.getMag()[:,1]
         w = self.getMag()[:,2]
         
-        n = np.sqrt(u**2 + v**2 + w**2);
-        
+        #n = np.sqrt(u**2 + v**2 + w**2); #to normalize by total magnetic field strength
+        n = 1 #unnormalized
     
         x = self.getPositions()[:,0]
         y = self.getPositions()[:,1]
        
         plt.quiver(x,y,u/n,v/n)
+        (x,H) = self.estimateLocation();
+        plt.title('location = {}, h = {}'.format(x, H))
+        plt.axis('equal')
         plt.show()
 
     
@@ -294,6 +297,11 @@ def grabReadings(arduino):
     arduino.reset_input_buffer()
     
     return (rr,nread)
+
+def saveReadings(arduino,filepos):
+    (rr,nread) = grabReadings(arduino)
+    mr = MagReading(rr)
+    np.savetxt('e:\magreadings\mag' + filepos + '.txt', np.hstack((mr.getPositions(), mr.getMag())))
     
 
 def repeatMeasurements(arduino):
