@@ -11,6 +11,12 @@ import numpy as np
 def calculateFieldValues(OB, H, Positions):
     #calculates 3(HdotX)X/(X^5) - H/X^3; X = P - OB
     #for each row of Positions (P = Positions[j,:])
+    
+    B= 0*Positions
+    for j in range(0, Positions.shape[0]):
+        P= Positions[j,:]
+        B[j, :]= ((3*(np.dot(H, P-OB))*(P-OB))/(P-OB)^5)-(H/(P-OB)^3)
+    
     return B
 
 def findR(B,P):
@@ -52,7 +58,7 @@ def calculateGs (r,H,Positions):
 def findt (G2,G1,G0,B):
     #find that minimizes square of (G2xB)t^2 + (G1xB)t + G0xB
     
-    t=2 #...
+    
     return t
 
 def getPositionAndOrientation(B,P):
