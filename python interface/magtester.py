@@ -103,6 +103,13 @@ class MagReading:
     def getPositions(self):
         return self.sensorPositions[self.valid,:]
     
+    def getDataMatrix(self, prepend =-1):
+        mat = np.hstack((self.getPositions(), self.getMag()))
+        if (prepend >= 0):
+            temp = np.transpose((np.atleast_2d([prepend]*mat.shape[0])))
+            mat = np.hstack((temp, mat))
+        return mat
+    
     def plotXY(self):
         u = self.getMag()[:,0]
         v = self.getMag()[:,1]
@@ -298,6 +305,35 @@ def grabReadings(arduino):
     
     return (rr,nread)
 
+def readManyReadings(nreadings, arduino):
+     #for loop to capture nreadings MagReadings (using first two lines of saveReadings)
+    #return list of MagReadings that is nreadings long
+    readings=[]
+    for x in range(0, nreadings):
+        (rr,nread) = grabReadings(arduino)
+        mr = MagReading(rr)
+        readings.append(mr)
+    return readings
+
+def saveManyReadings(filename,readings):
+    #make a new data array that has all the readings together with reading # (e.g. 0-99) as first column
+    #
+    # e.g. 23rd reading
+    # 23 0 0 0 Bx By Bz
+    # 23 0 75 0 Bx By Bz 
+    #....
+    # 24 0 0 0 Bx By Bz
+    
+    #for j in range(...):
+    #  readings[j].getDataMatrix(j) <-- store the result in a list and then use vstack to turn into a single long matrix
+    #then use np.savetxt to save
+    magList= []
+    for j in range(0, len(readings)):
+        mat= readings[j].getDataMatrix(j)
+        magList.append(mat)
+    magList= np.vstack(magList)
+    np.savetxt('e:\magreadings\-'+ filename+ '.txt', magList)
+    return mat
 def saveReadings(arduino,filepos):
     (rr,nread) = grabReadings(arduino)
     mr = MagReading(rr)
@@ -323,6 +359,76 @@ def repeatMeasurements(arduino):
         #(x,H) = mr.estimateLocation()
         #print('location = {}, h = {}'.format(x, H))
         plt.pause(0.1)
+
+# from
+# https://github.com/aleksandrbazhin/ellipsoid_fit_python/blob/master/ellipsoid_fit.py
+# MIT License: https://github.com/aleksandrbazhin/ellipsoid_fit_python/blob/master/LICENSE
+# http://www.mathworks.com/matlabcentral/fileexchange/24693-ellipsoid-fit
+# for arbitrary axes
+def ellipsoid_fit(X):
+    x = X[:, 0]
+    y = X[:, 1]
+    z = X[:, 2]
+    D = np.array([x * x + y * y - 2 * z * z,
+                 x * x + z * z - 2 * y * y,
+                 2 * x * y,
+                 2 * x * z,
+                 2 * y * z,
+                 2 * x,
+                 2 * y,
+                 2 * z,
+                 1 - 0 * x])
+    d2 = np.array(x * x + y * y + z * z).T # rhs for LLSQ
+    u = np.linalg.solve(D.dot(D.T), D.dot(d2))
+    a = np.array([u[0] + 1 * u[1] - 1])
+    b = np.array([u[0] - 2 * u[1] - 1])
+    c = np.array([u[1] - 2 * u[0] - 1])
+    v = np.concatenate([a, b, c, u[2:]], axis=0).flatten()
+    A = np.array([[v[0], v[3], v[4], v[6]],
+                  [v[3], v[1], v[5], v[7]],
+                  [v[4], v[5], v[2], v[8]],
+                  [v[6], v[7], v[8], v[9]]])
+
+    center = np.linalg.solve(- A[:3, :3], v[6:9])
+
+    translation_matrix = np.eye(4)
+    translation_matrix[3, :3] = center.T
+
+    R = translation_matrix.dot(A).dot(translation_matrix.T)
+
+    evals, evecs = np.linalg.eig(R[:3, :3] / -R[3, 3])
+    evecs = evecs.T
+
+    radii = np.sqrt(1. / np.abs(evals))
+    radii *= np.sign(evals)
+
+    return center, evecs, radii, v
+
+def fitEllipsoids(mat):
+    #nsensors - can hard code it nsensors = 7
+    #get B field for each sensor **
+    # for j in range(0,nsensors):
+    #   get B field for that sensor B[j] = datamatrix[j::nsensors,4:] <- check
+    #   fit B field to ellipsoid and store results in list form
+    #return lists of centers, radii, evecs
+    listCenters= []
+    listRadii=[]
+    listEvecs=[]
+    nsensors=7
+    for j in range(0, nsensors):
+        B = mat[j::nsensors, 4:]
+        (center, evecs, radii, v)= ellipsoid_fit(B)
+        listCenters.append(center)
+        listRadii.append(radii)
+        listEvecs.append(evecs)
+    return (listCenters, listRadii, listEvecs)
+        
+        
+        
+        
+        
+    
+    
 
 # time.sleep(1)
 

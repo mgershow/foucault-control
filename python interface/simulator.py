@@ -5,7 +5,7 @@ Created on Tue Jul 12 10:43:39 2022
 @author: Molly
 """
 import numpy as np
-
+import scipy.optimize
 
 PBoard  = np.array([[0,0,0],
                     [0, 75, 0],
@@ -16,7 +16,7 @@ PBoard  = np.array([[0,0,0],
                     [0,-25,0],
                     [0,50,0]])
 
-def calculateFieldValues(OB, H, Positions = PBoard, Scaling = 7e6):
+def calculateFieldValues(OB, H, Positions = PBoard, Scaling = 1):
     #calculates 3(HdotX)X/(X^5) - H/X^3; X = P - OB
     #for each row of Positions (P = Positions[j,:])
     
@@ -25,6 +25,19 @@ def calculateFieldValues(OB, H, Positions = PBoard, Scaling = 7e6):
         P= Positions[j,:]
         B[j, :]= ((3*(np.dot(H, P-OB))*(P-OB))/np.linalg.norm(P-OB)**5)-(H/np.linalg.norm(P-OB)**3)
     return B*Scaling
+
+def obj(x,B,P):
+    
+    H= x[:3]
+    OB= x[3:]
+    BSim= calculateFieldValues(OB, H, P)    
+    
+    return ((B- BSim).flatten())
+
+def getPositionAndOrientationLeastSquares(B,P,Hinit,OBinit):
+    w0 = np.hstack((Hinit,OBinit))
+    result = scipy.optimize.least_squares(obj, w0, args = (B,P))
+    return (result.x[:3], result.x[3:])
 
 def findR(B,P=PBoard):
     #returns the R matrix [B' (BxP)'] for set of measurements B at position P
@@ -64,18 +77,28 @@ def calculateGs (r,H,Positions=PBoard):
         
     return (G2,G1,G0)
 
-
-
-
-
-#XXtest against  findR(B,Pboard):, getV(R):, getrAndH(v): --> H should agree with simulation input; if not, stop and think
+def findt (G2,G1,G0,B):
+    #find that minimizes square of (G2xB)t^2 + (G1xB)t + G0xB
     
-#if that works, try to finish calculateGs and findt
+    
+    return t
+
+def getPositionAndOrientation(B,P):
+    
+    
+    return B, P
+
+
+
+
+#Xtest against  findR(B,Pboard):, getV(R):, getrAndH(v): --> H should agree with simulation input; if not, stop and think
+    
+#if that works, try to finish XcalculateGs and findt
 #test getPositionAndOrientation(B,Pboard) against simulation input
     
-#if you get stuck or if you finish, then try adding noise to B,
-#e.g. B = B + np.random.random_sample(B.shape)*sigma #sigma is the noise level
-#then test to see effect
+#Xif you get stuck or if you finish, then try adding noise to B,
+#Xe.g. B = B + np.random.random_sample(B.shape)*sigma #sigma is the noise level
+#Xthen test to see effect
     
 #ultimately what we want is error vs sigma
 #pick a sigma, make many noisy fields, measure H, average of Htrue dot Hmeas vs. sigma (0 -->1, 0.1-->0.98?)
