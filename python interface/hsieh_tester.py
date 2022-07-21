@@ -7,17 +7,17 @@ Created on Mon Jul 11 14:15:42 2022
 #implementing Hsieh et al. 2019 (check name)
 
 import numpy as np
+import scipy.optimize
 
-def calculateFieldValues(OB, H, Positions):
+def calculateFieldValues(OB, H, Positions, Scaling =1):
     #calculates 3(HdotX)X/(X^5) - H/X^3; X = P - OB
     #for each row of Positions (P = Positions[j,:])
     
     B= 0*Positions
     for j in range(0, Positions.shape[0]):
         P= Positions[j,:]
-        B[j, :]= ((3*(np.dot(H, P-OB))*(P-OB))/(P-OB)^5)-(H/(P-OB)^3)
-    
-    return B
+        B[j, :]= ((3*(np.dot(H, P-OB))*(P-OB))/np.linalg.norm(P-OB)**5)-(H/np.linalg.norm(P-OB)**3)
+    return B*Scaling
 
 def findR(B,P):
     #returns the R matrix [B' (BxP)'] for set of measurements B at position P
@@ -89,19 +89,94 @@ def getPolynomialCoefficients(G2,G1,G0,B):
    
     vectorOfCoefficients = np.array([c1, c2, c3, c4])
     origvector = np.array([g22*1e4, 2*g21*1e3, (2*g20+g11)*1e2, 2*g10*10, g00])
-    return  (vectorOfCoefficients, origvector)
-
+    return  (vectorOfCoefficients, origvector, (g2,g1,g0))
+# def findt (G2,G1,G0,B):
+#     #find that minimizes square of (G2xB)t^2 + (G1xB)t + G0xB
+#     temp = getPolynomialCoefficients(G2,G1,G0,B)
+#     (g2,g1,g0) = temp[2]
+    
+#     g2 = g2.flatten()
+#     g1 = g1.flatten()
+#     g0 = g0.flatten()
+    
+#     t=np.zeros(g2.shape[0])
+    
+#     for j in range(0,g2.shape[0]):
+        
+#         g22 = np.dot(g2[j,:].flatten(),g2[j,:].flatten())
+#         g21 = np.dot(g2[j,:].flatten(),g1[j,:].flatten())
+#         g20 = np.dot(g2[j,:].flatten(),g0[j,:].flatten())
+        
+#         g11 = np.dot(g1[j,:].flatten(),g1[j,:].flatten())
+#         g10 = np.dot(g1[j,:].flatten(),g0[j,:].flatten())
+        
+#         g00 = np.dot(g0[j,:].flatten(),g0[j,:].flatten())
+#         polyvec = np.array([g22, 2*g21, (2*g20+g11), 2*g10, g00])
+#         roots = np.roots(np.poly1d(polyvec).deriv())
+#         t[j] = roots[np.argmin(np.polyval(polyvec,roots))]
+    
+    
+#     return t
 def findt (G2,G1,G0,B):
     #find that minimizes square of (G2xB)t^2 + (G1xB)t + G0xB
+    temp = getPolynomialCoefficients(G2,G1,G0,B)
+    (g2,g1,g0) = temp[2]
     
+    g2 = g2.flatten()
+    g1 = g1.flatten()
+    g0 = g0.flatten()
     
+    t=np.zeros((g2.shape[0],2))
+    
+    for j in range(0,g2.shape[0]):        
+        t[j,:] = np.roots((g2[j],g1[j],g0[j]))
+        
+         
     return t
 
+def fitBTandResiduals (OB,H,B,P):
+    Bfit = calculateFieldValues(OB, H, P)
+    BT0 = np.nanmedian(B.flatten()/Bfit.flatten())
+    BT = scipy.optimize.leastsq(lambda b : b*Bfit.flatten()-B.flatten(), BT0)[0]
+    r = BT*Bfit.flatten()-B.flatten()
+    return (BT,np.dot(r,r))
+
+
+def getPositionAndOrientationLeastSquares(B,P,Hinit,OBinit):
+    obj = lambda x: (B-calculateFieldValues(x[3:], x[:3], P)).flatten()
+    w0 = np.hstack((Hinit,OBinit))
+    result = scipy.optimize.least_squares(obj, w0)
+    return (result.x[:3], result.x[3:])
+
+
 def getPositionAndOrientation(B,P):
+    R = findR(B,P)
+    (r,H) = getrAndH(getV(R))
+    (G2,G1,G0) = calculateGs(r,H,P)
+    t = findt(G2,G1,G0,B)
+    t = t.flatten()
+    bt = 0*t
+    resid = 0*t
+    for j in range(0,len(t)):
+        (bt[j],resid[j]) = fitBTandResiduals(np.cross(r,H) +t[j]*H, H, B, P)
     
+    ind = np.argmin(resid)
+    Hinit = H*bt[ind]
+    OBinit = np.cross(r,H) +t[ind]*H
+
+    return(getPositionAndOrientationLeastSquares(B, P, Hinit, OBinit))    
     
-    return B, P
+def getPositionAndOrientationFile(filename):
+    Breading= np.loadtxt('e:\magreadings720\ ' + filename +'.txt')
+    Bnomag= np.loadtxt('e:\magreadings720\ nomagnet.txt')
+    B = (Breading-Bnomag)[:,3:]
+    P = Bnomag[:,:3]
+    (H,OB) = getPositionAndOrientation(B, P)
+    M = np.linalg.norm(H)
+    H = H/M
+    return (OB, H, M)
     
+        
     
 
     
