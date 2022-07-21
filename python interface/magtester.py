@@ -332,12 +332,12 @@ def saveManyReadings(filename,readings):
         mat= readings[j].getDataMatrix(j)
         magList.append(mat)
     magList= np.vstack(magList)
-    np.savetxt('e:\magreadings\-'+ filename+ '.txt', magList)
+    np.savetxt('e:\magreadings\ '+ filename+ '.txt', magList)
     return mat
 def saveReadings(arduino,filepos):
     (rr,nread) = grabReadings(arduino)
     mr = MagReading(rr)
-    np.savetxt('e:\magreadings\mag' + filepos + '.txt', np.hstack((mr.getPositions(), mr.getMag())))
+    np.savetxt('e:\magreadings720\ ' + filepos + '.txt', np.hstack((mr.getPositions(), mr.getMag())))
     
 
 def repeatMeasurements(arduino):

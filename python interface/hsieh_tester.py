@@ -55,6 +55,42 @@ def calculateGs (r,H,Positions):
         G0[j,:] = (3*(np.dot(H, P))*P)-(3*(np.dot(H,P))*(np.cross(r, H)))- ((np.dot(P, P))+ (np.dot(r,r)) - (2*(np.dot(np.cross(r,H) , P))*H))
     return (G2,G1,G0)
 
+
+
+
+def getPolynomialCoefficients(G2,G1,G0,B):
+
+    g2 = np.cross(G2,B)
+    g1 = np.cross(G1,B)
+    g0 = np.cross(G0,B)
+
+    g22 = np.dot(g2.flatten(),g2.flatten())
+    g21 = np.dot(g2.flatten(),g1.flatten())
+    g20 = np.dot(g2.flatten(),g0.flatten())
+    
+    g11 = np.dot(g1.flatten(),g1.flatten())
+    g10 = np.dot(g1.flatten(),g0.flatten())
+    
+    g00 = np.dot(g0.flatten(),g0.flatten())
+    
+    c1 = 2*g22 * 1e4
+    c2 = 3*g21 * 1e3
+    c3 = (2*g20+g11) * 1e2 
+    c4 = g10 * 10
+    
+    # print([c1,c2,c3,c4])
+
+    # c1= 2*(np.dot(g2.flatten(),g2.flatten()))
+    # c2= 3*(np.dot(g2.flatten(),g1.flatten()))
+    # c3= (2*(np.dot(g2.flatten(),g0.flatten()))) +(np.dot(g1.flatten(),g1.flatten()))
+    # c4= np.dot(g0.flatten(), g1.flatten())
+    # print([c1,c2,c3,c4])
+
+   
+    vectorOfCoefficients = np.array([c1, c2, c3, c4])
+    origvector = np.array([g22*1e4, 2*g21*1e3, (2*g20+g11)*1e2, 2*g10*10, g00])
+    return  (vectorOfCoefficients, origvector)
+
 def findt (G2,G1,G0,B):
     #find that minimizes square of (G2xB)t^2 + (G1xB)t + G0xB
     
