@@ -289,7 +289,7 @@ def startup():
     return arduino
 
 def grabReadings(arduino):
-    sendCommand(arduino, 'T',0,[2 ,0, 0, 0])#enable magnetometer
+    sendCommand(arduino, 'T',0,[2 ,0, 0, 0]) #enable magnetometer
     time.sleep(0.1)
     
     while(arduino.in_waiting < 160):
@@ -334,10 +334,10 @@ def saveManyReadings(filename,readings):
     magList= np.vstack(magList)
     np.savetxt('e:\magreadings\ '+ filename+ '.txt', magList)
     return mat
-def saveReadings(arduino,filepos):
+def saveReadings(arduino,filename):
     (rr,nread) = grabReadings(arduino)
     mr = MagReading(rr)
-    np.savetxt('e:\magreadings720\ ' + filepos + '.txt', np.hstack((mr.getPositions(), mr.getMag())))
+    np.savetxt('e:\magreadings726\ '+ filename+ '.txt', np.hstack((mr.getPositions(), mr.getMag())))
     
 
 def repeatMeasurements(arduino):

@@ -223,8 +223,34 @@ def quiverPlot(filename):
     (fig, ax)= makePlot()
     
     plt.quiver(Breading[:,0], Breading[:,1], B_mag[:, 3], B_mag[:,4])
-    
  
+
+
+
+def plotx (OBx0, OBx025, OBx05, OBx075, OBx1, OBx125, OBx15, OBx175, OBx2, OBx225, OBx25, OBx275, OBx3, OBx325, OBx35, OBx375, OBx4):
+     
+    
+     plt.plot(0*25.4, OBx0[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.025*25.4, OBx025[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.05*25.4, OBx05[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.075*25.4, OBx075[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.1*25.4, OBx1[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.125*25.4, OBx125[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.15*25.4, OBx15[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.175*25.4, OBx175[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.2*25.4, OBx2[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.225*25.4, OBx225[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.25*25.4, OBx25[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')         
+     plt.plot(0.275*25.4, OBx275[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.3*25.4, OBx3[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.325*25.4, OBx325[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.35*25.4, OBx35[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.375*25.4, OBx375[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     plt.plot(0.4*25.4, OBx4[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+     
+                                                                                  
+                           
+     
 
 
 

@@ -167,7 +167,7 @@ def getPositionAndOrientation(B,P):
     return(getPositionAndOrientationLeastSquares(B, P, Hinit, OBinit))    
     
 def getPositionAndOrientationFile(filename):
-    Breading= np.loadtxt('e:\magreadings720\ ' + filename +'.txt')
+    Breading= np.loadtxt('e:\magreadings726\ '+ filename+ '.txt')
     Bnomag= np.loadtxt('e:\magreadings720\ nomagnet.txt')
     B = (Breading-Bnomag)[:,3:]
     P = Bnomag[:,:3]
@@ -175,9 +175,4 @@ def getPositionAndOrientationFile(filename):
     M = np.linalg.norm(H)
     H = H/M
     return (OB, H, M)
-    
-        
-    
-
-    
 
