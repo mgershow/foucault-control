@@ -247,10 +247,11 @@ def plotx (OBx0, OBx025, OBx05, OBx075, OBx1, OBx125, OBx15, OBx175, OBx2, OBx22
      plt.plot(0.35*25.4, OBx35[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
      plt.plot(0.375*25.4, OBx375[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
      plt.plot(0.4*25.4, OBx4[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
-     
-                                                                                  
-                           
-     
+    # plt.plot(0.425*25.4, OBx425[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')
+   #  plt.plot(0.45*25.4, OBx45[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')                                                                             
+    # plt.plot(0.475*25.4, OBx475[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red')                      
+    # plt.plot(0.5*25.4, OBx5[0], marker= 'o', markersize= 3, markeredgecolor= 'red', markerfacecolor= 'red') 
+
 
 
 
