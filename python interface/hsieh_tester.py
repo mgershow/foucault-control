@@ -4,7 +4,6 @@ Created on Mon Jul 11 14:15:42 2022
 
 @author: Molly
 """
-
 #implementing Hsieh et al. 2019 (check name)
 
 import numpy as np
@@ -51,7 +50,7 @@ def calculateGs (r,H,Positions):
     G2 = 0*Positions
     G1 = 0*Positions
     G0 = 0*Positions
-    
+    print(Positions.shape)
     for j in range(0,Positions.shape[0]):
         P = Positions[j,:]    
         G2[j,:] = 2*H
@@ -204,7 +203,6 @@ def calculateResiduals (xcoordinates, sensorinds, filenames, H7, OB7):
     P= Bnomag[sensorinds,:3]
     B= (Breading-Bnomag)[sensorinds,:3]
     
-    
     Pnew= P[sensorinds,:]
     Bnew= B[sensorinds,:]
     H7new= H7[sensorinds,:]
@@ -215,8 +213,6 @@ def calculateResiduals (xcoordinates, sensorinds, filenames, H7, OB7):
         print (j)
         (OB[j,:],H[j,:])= getPositionAndOrientationLeastSquares(Bnew[j,:], Pnew[j,:], H7new[j,:], OB7new[j,:])
     return (OB, H)
-    
-   # B=
     
   #  OBx0= positions[0]
    # OBx025= positions[1]
