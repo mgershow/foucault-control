@@ -4,6 +4,7 @@ Created on Mon Jul 11 14:15:42 2022
 
 @author: Molly
 """
+
 #implementing Hsieh et al. 2019 (check name)
 
 import numpy as np
@@ -181,48 +182,71 @@ def getPositionAndOrientationFile(filename):
 
 
 
-def calculateResiduals (xcoordinates, nsensors, filenames, positions):
+def calculateResiduals (xcoordinates, sensorinds, filenames, H7, OB7):
     #Find positions
-    positions= []
+    H7= 0*H7
+    OB7= 0*OB7
+    j=0
     for x in filenames:
         Breading= np.loadtxt('e:\magreadings726\ '+ x+ '.txt')
         Bnomag= np.loadtxt('e:\magreadings720\ nomagnet.txt')
-        B = (Breading-Bnomag)[:nsensors,3:]
-        P = Bnomag[:nsensors,:3]
-        (H,OB) = getPositionAndOrientation(B, P)
-        M = np.linalg.norm(H)
-        H = H/M
-        positions.append(OB)
-    print(positions)
-    OBx0= positions[0]
-    OBx025= positions[1]
-    OBx05= positions[2]
-    OBx075= positions[3]
-    OBx1= positions[4]
-    OBx125= positions[5]
-    OBx15= positions[6]
-    OBx175= positions[7]
-    OBx2= positions[8]
-    OBx225= positions[9]
-    OBx25= positions[10]
-    OBx275= positions[11]
-    OBx3= positions[12]
-    OBx325= positions[13]
-    OBx35= positions[14]
-    OBx375= positions[15]
-    OBx4= positions[16]  
-    ycoordinates= np.array([OBx0[0], OBx025[0], OBx05[0], OBx075[0], OBx1[0], OBx125[0], OBx15[0], OBx175[0], OBx2[0], OBx225[0], OBx25[0], OBx275[0], OBx3[0], OBx325[0], OBx35[0], OBx375[0], OBx4[0]])
+        B = (Breading-Bnomag)[:,3:]
+        P = Bnomag[:,:3]
+        (H7[j,:],OB7[j,:]) = getPositionAndOrientation(B, P)
+        H7[j,:]= H7[j,:]
+        OB7[j,:]= OB7[j,:]
+        j+=1
+    
+    M = np.linalg.norm(H7)
+    H7 = H7/M
+    
+    
+    P= Bnomag[sensorinds,:3]
+    B= (Breading-Bnomag)[sensorinds,:3]
+    
+    
+    Pnew= P[sensorinds,:]
+    Bnew= B[sensorinds,:]
+    H7new= H7[sensorinds,:]
+    OB7new= OB7[sensorinds,:]
+    OB= 0*OB7
+    H= H7*0
+    for j in range (0,len(sensorinds)):
+        print (j)
+        (OB[j,:],H[j,:])= getPositionAndOrientationLeastSquares(Bnew[j,:], Pnew[j,:], H7new[j,:], OB7new[j,:])
+    return (OB, H)
+    
+   # B=
+    
+  #  OBx0= positions[0]
+   # OBx025= positions[1]
+   # OBx05= positions[2]
+  #  OBx075= positions[3]
+  #  OBx1= positions[4]
+  #  OBx125= positions[5]
+  # OBx15= positions[6]
+ #   OBx175= positions[7]
+   # OBx2= positions[8]
+ #   OBx225= positions[9]
+ #   OBx25= positions[10]
+ #   OBx275= positions[11]
+ #   OBx3= positions[12]
+ #   OBx325= positions[13]
+ #   OBx35= positions[14]
+  #  OBx375= positions[15]
+ #   OBx4= positions[16]  
+  #  ycoordinates= np.array([OBx0[0], OBx025[0], OBx05[0], OBx075[0], OBx1[0], OBx125[0], OBx15[0], OBx175[0], OBx2[0], OBx225[0], OBx25[0], OBx275[0], OBx3[0], OBx325[0], OBx35[0], OBx375[0], OBx4[0]])
     #plot points and line of best fit
-    (fig,ax)= makePlot()
-    plotx(OBx0, OBx025, OBx05, OBx075, OBx1, OBx125, OBx15, OBx175, OBx2, OBx225, OBx25, OBx275, OBx3, OBx325, OBx35, OBx375, OBx4)
-    a,b= np.polyfit(xcoordinates, ycoordinates, 1)
-    plt.plot(xcoordinates, a*xcoordinates+b, c= 'black')
+ #   (fig,ax)= makePlot()
+ #   plotx(OBx0, OBx025, OBx05, OBx075, OBx1, OBx125, OBx15, OBx175, OBx2, OBx225, OBx25, OBx275, OBx3, OBx325, OBx35, OBx375, OBx4)
+ #   a,b= np.polyfit(xcoordinates, ycoordinates, 1)
+  #  plt.plot(xcoordinates, a*xcoordinates+b, c= 'black')
     #calculate and plot residuals
-    residuals= ycoordinates-(a*xcoordinates+b)
-    (fig, ax)= makePlot()
-    plt.plot(xcoordinates, residuals)
-    error= np.sqrt(np.sum(residuals**2))/(17-2)
-    return error
+  #  residuals= ycoordinates-(a*xcoordinates+b)
+   # (fig, ax)= makePlot()
+   # plt.plot(xcoordinates, residuals)
+  #  error= np.sqrt(np.sum(residuals**2))/(17-2)
+ #   return error
     #calculate x measured using B_sensors(inds), P_sensors(inds)
     # r= xmeas - a * x_micro +b
     #x_micro[j]
