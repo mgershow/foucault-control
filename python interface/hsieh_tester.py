@@ -187,6 +187,17 @@ def calculateResiduals (xcoordinates, nsensors, filenames, positions):
     for x in filenames:
         Breading= np.loadtxt('e:\magreadings726\ '+ x+ '.txt')
         Bnomag= np.loadtxt('e:\magreadings720\ nomagnet.txt')
+        # so here, what I would like you to do if first use all 7 sensors to get the position and orientation
+        # (H7,OB7) = getPositionsAndOrientation(....)
+        #
+        # change nsensors to sensorinds
+        # so instead of using P = Bnomag[:nsensors,:3]
+        # you would just use P = Bnomag[sensorinds,:3]
+        # then what I would like you to do is use sensorinds to select the appropriate values from
+        # B,P, H7,B7 (e.g. H7new = H7[sensords,:])
+        # then use (OB,H) = getPositionAndOrientationLeastSquares(Bnew,Pnew,H7new, OB7new) to find the
+        # best fit position and orientation
+        
         B = (Breading-Bnomag)[:nsensors,3:]
         P = Bnomag[:nsensors,:3]
         (H,OB) = getPositionAndOrientation(B, P)
