@@ -183,12 +183,17 @@ def getPositionAndOrientationFile(filename):
 def calculateResiduals (xcoordinates, sensorinds, filenames):
     #Find positions
     positions= []
+    Breading= np.loadtxt('e:\magreadings726\ '+ x+ '.txt')
+    Bnomag= np.loadtxt('e:\magreadings720\ nomagnet.txt')
+    B = (Breading-Bnomag)[:,3:]
+    P = Bnomag[:,:3]
+    (H7,OB7) = getPositionAndOrientation(B, P)
     for x in filenames:
         Breading= np.loadtxt('e:\magreadings726\ '+ x+ '.txt')
         Bnomag= np.loadtxt('e:\magreadings720\ nomagnet.txt')
         B = (Breading-Bnomag)[sensorinds,3:]
         P = Bnomag[sensorinds,:3]
-        (H,OB) = getPositionAndOrientation(B, P)
+        (H,OB) = getPositionAndOrientationLeastSquares(B, P,H7,OB7)
         M = np.linalg.norm(H)
         H = H/M
         positions.append(OB)
