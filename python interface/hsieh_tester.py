@@ -145,11 +145,14 @@ def fitBTandResiduals (OB,H,B,P):
     return (BT,np.dot(r,r))
 
 
-def getPositionAndOrientationLeastSquares(B,P,Hinit,OBinit):
+def getPositionAndOrientationLeastSquares(B,P,Hinit,OBinit,resid = False):
     obj = lambda x: (B-calculateFieldValues(x[3:], x[:3], P)).flatten()
     w0 = np.hstack((Hinit,OBinit))
     result = scipy.optimize.least_squares(obj, w0)
-    return (result.x[:3], result.x[3:])
+    if (resid):
+        return (result.x[:3], result.x[3:],result.cost)
+    else:
+        return (result.x[:3], result.x[3:])
 
 
 def getPositionAndOrientation(B,P):
@@ -163,11 +166,23 @@ def getPositionAndOrientation(B,P):
     for j in range(0,len(t)):
         (bt[j],resid[j]) = fitBTandResiduals(np.cross(r,H) +t[j]*H, H, B, P)
     
-    ind = np.argmin(resid)
-    Hinit = H*bt[ind]
-    OBinit = np.cross(r,H) +t[ind]*H
 
-    return(getPositionAndOrientationLeastSquares(B, P, Hinit, OBinit))    
+    n = np.min((len(t),10))
+    inds = np.argsort(resid)
+    
+    HH = []
+    OBB = []
+    resid = np.zeros((n,))
+    for i in range(n):
+        ind = inds[i]
+        Hinit = H*bt[ind]
+        OBinit = np.cross(r,H) +t[ind]*H
+        (H,OB,resid[i]) = getPositionAndOrientationLeastSquares(B, P, Hinit, OBinit,True)
+        HH.append(H)
+        OBB.append(OB)
+        
+    ind = np.argmin(resid)
+    return(getPositionAndOrientationLeastSquares(B, P, HH[ind], OBB[ind]))    
     
 def getPositionAndOrientationFile(filename):
     Breading= np.loadtxt('e:\\magreadings726\\' + filename + '.txt')
@@ -243,7 +258,7 @@ def filenamesAndPositionsMolly():
 
         return(center, edge, offboard, xcoordinates)
 
-def loadAndProcessFullDataSet(filenames):
+def loadAndProcessFullDataSet(filenames,H0=[],OB0=[]):
     Bnomag= np.loadtxt('e:\\magreadings720\\nomagnet.txt')
     Breading = [];
     for filename in filenames:
@@ -255,7 +270,10 @@ def loadAndProcessFullDataSet(filenames):
         Breading[j][:,3:] = (Breading[j]-Bnomag)[:,3:];
         B = Breading[j][:,3:]
         P = Breading[j][:,:3]
-        (H7,OB7) = getPositionAndOrientation(B, P)
+        if (any(H0) and any(OB0)):
+            (H7,OB7) = getPositionAndOrientationLeastSquares(B, P, H0, OB0)
+        else:
+            (H7,OB7) = getPositionAndOrientation(B, P)
         fullSensorSetH[j,:] = H7
         fullSensorSetOB[j,:] = OB7
     
