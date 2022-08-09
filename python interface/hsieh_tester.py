@@ -11,6 +11,7 @@ import scipy.optimize
 from simulator import plotx
 from simulator import makePlot
 import matplotlib.pyplot as plt
+from itertools import combinations 
 
 def calculateFieldValues(OB, H, Positions, Scaling =1):
     #calculates 3(HdotX)X/(X^5) - H/X^3; X = P - OB
@@ -169,8 +170,8 @@ def getPositionAndOrientation(B,P):
     return(getPositionAndOrientationLeastSquares(B, P, Hinit, OBinit))    
     
 def getPositionAndOrientationFile(filename):
-    Breading= np.loadtxt('e:\magreadings726\ '+ filename+ '.txt')
-    Bnomag= np.loadtxt('e:\magreadings720\ nomagnet.txt')
+    Breading= np.loadtxt('e:\\magreadings726\\' + filename + '.txt')
+    Bnomag= np.loadtxt('e:\\magreadings720\\nomagnet.txt')
     B = (Breading-Bnomag)[:,3:]
     P = Bnomag[:,:3]
     (H,OB) = getPositionAndOrientation(B, P)
@@ -222,6 +223,92 @@ def calculateResiduals (xcoordinates, sensorinds, filenames):
     error= np.sqrt(np.sum(residuals**2))/(17-2)
     return error
     
+
+def getPermutations (totalNumSensors, nSensorsToChoose):
+    #(sensorSelections, inclusionMatrix) = getPermutations (totalNumSensors, nSensorsToChoose)
+    #sensorSelections is list of combinations (e.g. (0,1,3))
+    #inclusionMatrix[i,j] is true iff sensor j is included in combination i
+    sensorSelections = list(combinations(range(totalNumSensors), nSensorsToChoose))
+    inclusionMatrix = np.zeros((len(sensorSelections), totalNumSensors), bool)
+    for i in range(len(sensorSelections)):
+        inclusionMatrix[i,sensorSelections[i]] = True
+    return (sensorSelections, inclusionMatrix)
+
+def filenamesAndPositionsMolly():
+
+        center = ['x0','x025','x05','x075','x1','x125','x15','x175','x2','x225','x25','x275','x3','x325','x35','x375','x4']
+        edge = ['edgex0','edgex025','edgex05','edgex075','edgex1','edgex125','edgex15','edgex175','edgex2','edgex225','edgex25','edgex275','edgex3','edgex325','edgex35','edgex375','edgex4']
+        offboard = ['offx0','offx025','offx05','offx075','offx1','offx125','offx15','offx175','offx2','offx225','offx25','offx275','offx3','offx325','offx35','offx375','offx4']
+        xcoordinates= np.array([0*25.4, 0.025*25.4, 0.05*25.4, 0.075*25.4, 0.1*25.4, 0.125*25.4, 0.15*25.4, 0.175*25.4, 0.2*25.4, 0.225*25.4, 0.25*25.4, 0.275*25.4, 0.3*25.4, 0.325*25.4, 0.35*25.4, 0.375*25.4, 0.4*25.4])
+
+        return(center, edge, offboard, xcoordinates)
+
+def loadAndProcessFullDataSet(filenames):
+    Bnomag= np.loadtxt('e:\\magreadings720\\nomagnet.txt')
+    Breading = [];
+    for filename in filenames:
+        Breading.append(np.loadtxt('e:\\magreadings726\\'+ filename + '.txt'))
+     
+    fullSensorSetH = np.zeros((len(Breading),3))
+    fullSensorSetOB = np.zeros((len(Breading),3))
+    for j in range(len(Breading)):
+        Breading[j][:,3:] = (Breading[j]-Bnomag)[:,3:];
+        B = Breading[j][:,3:]
+        P = Breading[j][:,:3]
+        (H7,OB7) = getPositionAndOrientation(B, P)
+        fullSensorSetH[j,:] = H7
+        fullSensorSetOB[j,:] = OB7
+    
+    return (fullSensorSetH, fullSensorSetOB, Breading)
+
+
+def calculateMSErrorSet (xcoordinates, filenames, nsensors):
+    (fullSensorSetH, fullSensorSetOB, Breading) = loadAndProcessFullDataSet(filenames)
+    OBf = fullSensorSetOB*0
+    p = np.polyfit(xcoordinates, fullSensorSetOB,1)
+    fullMS = np.zeros((3,))
+    for i in range(3):
+        OBf[:,i] = np.polyval(p[:,i],xcoordinates)
+        fullMS[i] = np.mean((fullSensorSetOB[:,i]-OBf[:,i])**2)    
+    (sensorSelections, inclusionMatrix) = getPermutations (7, nsensors) #hard code number of sensors
+    MS_diff_meas = np.zeros((len(sensorSelections),3))
+    MS_diff_fullfit = np.zeros((len(sensorSelections),3))
+    MS_diff_fit = np.zeros((len(sensorSelections),3))
+    for i in range(len(sensorSelections)):
+        OB = 0*fullSensorSetOB
+        for j in range(len(Breading)):
+            B = Breading[j][sensorSelections[i],3:]
+            P = Breading[j][sensorSelections[i],:3]
+            (__,OB[j,:]) = getPositionAndOrientationLeastSquares(B,P,fullSensorSetH[j,:], fullSensorSetOB[j,:])
+        MS_diff_meas[i,:] = np.mean((OB-fullSensorSetOB)**2,0)
+        MS_diff_fullfit[i,:] = np.mean((OB-OBf)**2,0)
+        
+        p = np.polyfit(xcoordinates, OB,1)
+        for j in range(3):
+            obf_local = np.polyval(p[:,j],xcoordinates)
+            MS_diff_fit[i,j] = np.mean((OB[:,j]-obf_local)**2)
+    
+    
+        
+    return (inclusionMatrix, MS_diff_meas, MS_diff_fullfit, MS_diff_fit)
+    
+    
+
+def calculateMSErrorBySensor(inclusionMatrix, MS_error):
+    MS_error_sensor = np.zeros((7,3))
+    for i in range(7):
+        MS_error_sensor[i,:] = np.mean(MS_error[inclusionMatrix[:,i],:],0)
+    
+    return MS_error_sensor
+
+def calculateMSErrorBySensorExclusion(inclusionMatrix, MS_error):
+    MS_error_sensor = np.zeros((7,3))
+    for i in range(7):
+        MS_error_sensor[i,:] = np.mean(MS_error[np.logical_not(inclusionMatrix[:,i]),:],0)
+    
+    return MS_error_sensor
+
+
 def calculateResiduals1 (xcoordinates, sensorinds, filenames):
     #Find positions
     positions= []

@@ -91,8 +91,8 @@ def getPositionAndOrientation(B,P):
     
     
     return B, P
-data= np.loadtxt('e:\magreadings\-rotating_100.txt')
-B= data[:,4:]
+#data= np.loadtxt('e:\magreadings\-rotating_100.txt')
+#B= data[:,4:]
 
 
 def getBs(B):
