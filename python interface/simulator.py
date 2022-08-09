@@ -216,7 +216,7 @@ def fitLocationLSQ(filename, Hinit = np.array([0, 0, 1e6]), OBinit = np.array([0
     
 
 def quiverPlot(filename):
-    Breading= np.loadtxt('e:\magreadings720\ ' + filename +'.txt')
+    Breading= np.loadtxt('e:\magreadings726\ ' + filename +'.txt')
     Bnomag= np.loadtxt('e:\magreadings720\ nomagnet.txt')
     B_mag= Breading-Bnomag
     
