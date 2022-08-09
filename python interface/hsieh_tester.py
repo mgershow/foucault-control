@@ -185,7 +185,7 @@ def calculateResiduals (xcoordinates, sensorinds, filenames):
     #Find positions
     positions= []
     for x in filenames:
-        Breading= np.loadtxt('e:\magreadings726\ '+ x+ '.txt')
+        Breading= np.loadtxt('e:\magreadings726_backup\ '+ x+ '.txt')
         Bnomag= np.loadtxt('e:\magreadings720\ nomagnet.txt')
         B = (Breading-Bnomag)[sensorinds,3:]
         P = Bnomag[sensorinds,:3]
