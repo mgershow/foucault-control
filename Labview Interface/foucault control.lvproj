@@ -44,7 +44,6 @@
 		<Item Name="voltage analysis" Type="Folder" URL="../voltage analysis">
 			<Property Name="NI.DISK" Type="Bool">true</Property>
 		</Item>
-		<Item Name="fit from queues.vi" Type="VI" URL="../multi-magnetometer fitting/fit from queues.vi"/>
 		<Item Name="foucault control panel.vi" Type="VI" URL="../foucault control panel.vi"/>
 		<Item Name="Dependencies" Type="Dependencies">
 			<Item Name="vi.lib" Type="Folder">
