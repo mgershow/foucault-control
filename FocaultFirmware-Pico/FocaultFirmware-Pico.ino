@@ -221,6 +221,8 @@ void setupADC (void) {
 
 void analogReadFunctionCore1 (void) {
 
+
+  
   static bool coilActive = false;
   static int coilCountdown = 3;
 
@@ -232,7 +234,6 @@ void analogReadFunctionCore1 (void) {
   } else {
     v_read.meas_type = (uint8_t) COILI;
   }
-
   /** ---------- new reading ---------- */
   static bool failedToTransmit = false;
   if (adc->getReading(v_read.data[0], v_read.meas_time) || failedToTransmit) {
@@ -245,7 +246,6 @@ void analogReadFunctionCore1 (void) {
       }
     }
   }
-
   /** -------- coil turns on / off ----------- */
   uint32_t coilState;
   if (rp2040.fifo.pop_nb(&coilState)) {
@@ -273,7 +273,8 @@ void setup1 (void) {
 
   Wire.setSDA(sda0Pin);
   Wire.setSCL(scl0Pin);
-  Wire.setClock(400000);
+  Wire.setClock(200000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
+ 
   Wire.begin();
 
   setupMAG();
@@ -281,8 +282,11 @@ void setup1 (void) {
 }
 
 void loop1(void) {
+  for (int j = 0; j < 8; ++j) {
+    digitalWrite(indicatorPins[j], LOW);
+  }
   analogReadFunctionCore1();
-  //pollMAG();
+  pollMAG();
 }
 
 /********************  core0 all others ********************************/
@@ -389,6 +393,7 @@ uint64_t getTime() {
 }
 
 void setLedMessage (LedMessageTypeT msg, bool setting) {
+  return; // bypass to use for other debugging
   if (msg == BAD_MSG) {
     digitalWrite(25, setting);
   }
@@ -473,7 +478,6 @@ void setReadyForCrossing(bool r) {
 
 bool retrigger = false;
 
-//needs redo?
 
 
 
