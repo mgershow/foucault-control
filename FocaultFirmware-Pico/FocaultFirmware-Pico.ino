@@ -210,6 +210,15 @@ uint64_t setLowerHalf (uint64_t val, uint32_t newlow) {
 
 static bool readDetector = true;
 
+void setupADC (void) {
+  adc_init();
+  adc_gpio_init(detectorPin);
+  adc_gpio_init(refPin);
+  adc_gpio_init(coilIPin);
+  readDetector = true;
+  adc->startRecording(detectorPin - A0);
+}
+
 void analogReadFunctionCore1 (void) {
 
   static bool coilActive = false;
@@ -259,10 +268,7 @@ void setup1 (void) {
 
   delay(5000);
   mmf.begin();
-  adc_init();
-  adc_gpio_init(detectorPin);
-  adc_gpio_init(refPin);
-  adc_gpio_init(coilIPin);
+
 
 
   Wire.setSDA(sda0Pin);
@@ -271,11 +277,12 @@ void setup1 (void) {
   Wire.begin();
 
   setupMAG();
+  setupADC();
 }
 
 void loop1(void) {
   analogReadFunctionCore1();
-  pollMAG();
+  //pollMAG();
 }
 
 /********************  core0 all others ********************************/
