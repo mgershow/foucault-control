@@ -13,6 +13,8 @@
 #include <MHG_MMC5603NJ_Arduino_Library.h>
 #include <MHG_MMC5603NJ_Arduino_Library_Constants.h>
 #include <MHG_MMC5603NJ_IO.h>
+#include <MHG_MEAS_FIFO.h>
+#include <MHG_ADC_DMA.h>
 
 #define mega 1000000.f
 #define micro 0.000001f
@@ -24,7 +26,9 @@
 #define VERSION 10
 
 
-MHG_MMC5603NJ_Array mmcarr = MHG_MMC5603NJ_Array(); 
+MHG_MMC5603NJ_Array mmcarr = MHG_MMC5603NJ_Array();
+MHG_MEAS_FIFO mmf;
+MHG_ADC_DMA *adc = MHG_ADC_DMA::getInstance();
 
 
 bool enableDataTransmission = false;
@@ -44,7 +48,7 @@ typedef enum {SET_COIL, SET_LED, SET_READY} ActionT;
 
 typedef enum {SYNC, DETVAL, COILI, MAGVEC, ACCVEC, CROSSING, MAG0, MAG1, MAG2, MAG3, MAG4, MAG5, MAG6, MAG7} TransmitTypeT;
 
-typedef enum {MAG_WORKS,PICO_ERROR,  AUTO_ON, READY_FOR_CROSSING, BAD_MSG, LED_ON, TRANSMIT_SERIAL, WATCHDOG_REBOOT} LedMessageTypeT;
+typedef enum {MAG_WORKS, PICO_ERROR,  AUTO_ON, READY_FOR_CROSSING, BAD_MSG, LED_ON, TRANSMIT_SERIAL, WATCHDOG_REBOOT} LedMessageTypeT;
 
 typedef struct {
   uint64_t us;
@@ -83,11 +87,9 @@ typedef struct {
 } EventT;
 
 
-CircularBuffer<Reading1T, 1000> analogTransmitFifo;
+CircularBuffer<MeasurementDataT, 1000> readingTransmitFifo;
 
-CircularBuffer<Reading3T, 500> coilTransmitFifo;
-
-CircularBuffer<multiMagMeasurementT, 500> magTransmitFifo;
+CircularBuffer<Reading1T, 10> detectorReadingFifo;
 
 CircularBuffer<Reading3T, 10> crossingTransmitFifo;
 
@@ -130,10 +132,10 @@ const int coil_alarm_num = 1;
 
 const float slopeMult = 50.35f;
 const float radian = 57.295779513082321f;
- 
+
 const uint32_t magPeriod = 3333; //us = 300 Hz
 
-const uint8_t indicatorPins[8] = {16,17,18,19,20,21,22,12};
+const uint8_t indicatorPins[8] = {16, 17, 18, 19, 20, 21, 22, 12};
 
 /***************************************************************/
 /******************* configurations ***************************/
@@ -146,17 +148,12 @@ float retriggerDelay = 0.25; //seconds AFTER pulse delivery
 
 float vref = 1.25;
 int verbosity = 100;
-const uint16_t numADCToAvg = 200; //rate < 500kHz / 3 / numavgs --> was 200 (about 800Hz), changed to 100 9/23/21 version 7
-const float vscaler = 3.3 / (4096.0 * (float) numADCToAvg); // vref / 4096 * numADCToAvg -- 4096 = 3.3 V; 256 summed readings
 
 const char *configname = "config.txt";
 
 /********************* state GLOBALS ********************************/
 
 
-Reading1T lastHigh;
-Reading1T lastLow;
-Reading1T lastReading;
 Reading3T coilReading;
 
 volatile bool readyForCrossing = true;
@@ -168,8 +165,8 @@ volatile bool coilState;
 float period;
 
 
-crossingT lastCrossing= {0,0,0,0};
-crossingT twoCrossings = {0,0,0,0};
+crossingT lastCrossing = {0, 0, 0, 0};
+crossingT twoCrossings = {0, 0, 0, 0};
 
 bool restarted = true;
 
@@ -187,22 +184,22 @@ uint32_t getLow(uint64_t val) {
 }
 
 uint32_t getHigh(uint64_t val) {
-  return * (((uint32_t *) (&val))+1);
+  return * (((uint32_t *) (&val)) + 1);
 }
 
 void splitIntoTwo(uint64_t val, uint32_t *low, uint32_t *high) {
-    if (low != NULL) {
-      *low = * ((uint32_t *) &val);
-    }
-    if (high != NULL) { 
-      *high = * (((uint32_t *) (&val))+1);
-    }
+  if (low != NULL) {
+    *low = * ((uint32_t *) &val);
+  }
+  if (high != NULL) {
+    *high = * (((uint32_t *) (&val)) + 1);
+  }
 }
 
 uint64_t combineIntoOne (uint32_t low, uint32_t high) {
   uint64_t val;
   * ((uint32_t *) &val) = low;
-  * (((uint32_t *) (&val))+1) = high;
+  * (((uint32_t *) (&val)) + 1) = high;
   return val;
 }
 
@@ -215,94 +212,71 @@ static bool readDetector = true;
 
 void analogReadFunctionCore1 (void) {
 
-  /*     analogReadInternals
-   * 
-   *     adc_gpio_init(pin);
-   *     adc_select_input(pin - A0);
-   *     return adc_read();
-   */
-  static uint32_t vdetaccum = 0;
-  static uint32_t vrefaccum = 0;
-  static uint32_t vcurraccum = 0;
-  static uint32_t microtime;
-  static uint16_t numreads = 0;
   static bool coilActive = false;
-  static int coilCountdown = 5;
-  if (numreads == numADCToAvg) {
-  
-    rp2040.fifo.push(microtime);
-    rp2040.fifo.push((uint32_t) readDetector);
-    rp2040.fifo.push(readDetector ? vdetaccum : vcurraccum);
-    rp2040.fifo.push(vrefaccum);
+  static int coilCountdown = 3;
 
-    vdetaccum = 0;
-    vrefaccum = 0;
-    vcurraccum = 0;
-    numreads = 0;
-    //after coil turns off, read the integral of the current for 10 more cycles, approx 5 ms, to get all current integrated and suppress detector feedthrough
-    if (coilActive) {
-      coilCountdown = 10;
-    } else {
-      if (coilCountdown > 0) {
-        --coilCountdown;
-      }else {
-        readDetector = true;
-        digitalWrite(resetIntegratorPin, HIGH); //done reading current integral, so reset the integrator
-      }
-    }
-  //  readDetector = !coilActive; //transition to reading detector after transmitting data - ensures coil voltage is not fed through
-    
-  }
-  uint32_t coilState;
-  if (rp2040.fifo.pop_nb(&coilState)) {
-    coilActive = (bool) coilState;
-    
-  }
-  if (coilActive & readDetector) {
-    //if the coil energizes while integrating detector, immediately stop integration and reset
-      vdetaccum = 0;
-      vrefaccum = 0;
-      vcurraccum = 0;
-      numreads = 0;
-      readDetector = false; 
-    }
-  
-  if (numreads == numADCToAvg >> 1) {
-    microtime = getLow(getTime());
-  }
+  MeasurementDataT v_read;
+
   if (readDetector) {
-    adc_select_input(detectorPin - A0);
-    vdetaccum += adc_read();
-    adc_select_input(refPin - A0);
-    vrefaccum += adc_read();
-    ++numreads;
+    v_read.meas_type = (uint8_t) DETVAL;
 
   } else {
-    if (!coilActive) { //wait until coil turns off to start reading integrator
-      adc_select_input(coilIPin - A0);
-      vcurraccum += adc_read();
-      ++numreads;
+    v_read.meas_type = (uint8_t) COILI;
+  }
+
+  /** ---------- new reading ---------- */
+  static bool failedToTransmit = false;
+  if (adc->getReading(v_read.data[0], v_read.meas_time) || failedToTransmit) {
+    failedToTransmit = !mmf.push_nb(v_read); //send reading to other core
+    if (!readDetector && !failedToTransmit) { //successful coil read
+      if  (--coilCountdown <= 0) {
+        digitalWrite(resetIntegratorPin, HIGH); //writing integrator pin low is handled elsewhere
+        adc->startRecording(detectorPin - A0);
+        readDetector = true;
+      }
     }
   }
 
-  
-  
+  /** -------- coil turns on / off ----------- */
+  uint32_t coilState;
+  if (rp2040.fifo.pop_nb(&coilState)) {
+
+    if (coilState && !coilActive) {
+      coilCountdown = 1000; //read coil integral continuously when coil is on
+      adc->startRecording(coilIPin - A0);
+      readDetector = false;
+    }
+    if (!coilState && coilActive) {
+      //coil shuts off
+      coilCountdown = 3; //record another 3 cycles (4-6 ms) to capture tail of integral/ allow detector to settle
+    }
+    coilActive = (bool) coilState;
+
+  }
 }
-////
-//void setup1 (void) {
 //
-//  delay(5000);
-//  adc_init();
-//  adc_gpio_init(detectorPin);
-//  adc_gpio_init(refPin);
-//  adc_gpio_init(coilIPin);
-//  
-//}
-//
-//void loop1(void) {
-//  //analogReadFunctionCore1();
-//  pollMAG();
-//}
+void setup1 (void) {
+
+  delay(5000);
+  mmf.begin();
+  adc_init();
+  adc_gpio_init(detectorPin);
+  adc_gpio_init(refPin);
+  adc_gpio_init(coilIPin);
+
+
+  Wire.setSDA(sda0Pin);
+  Wire.setSCL(scl0Pin);
+  Wire.setClock(400000);
+  Wire.begin();
+
+  setupMAG();
+}
+
+void loop1(void) {
+  analogReadFunctionCore1();
+  pollMAG();
+}
 
 /********************  core0 all others ********************************/
 
@@ -331,25 +305,18 @@ void setup() {
 
 
   Wire1.setSDA(sda1Pin);
-  Wire1.setSCL(scl1Pin);  
+  Wire1.setSCL(scl1Pin);
   Wire1.begin();
   setGain(0);
 
-
-  Wire.setSDA(sda0Pin);
-  Wire.setSCL(scl0Pin);
-  Wire.setClock(400000);
-  Wire.begin();
-  
-  setupMAG();
 
 
 
   if (hardware_alarm_is_claimed(coil_alarm_num)) {
     sendMessage("hardware coil alarm is claimed!!!!", 0);
     setLedMessage(PICO_ERROR, true);
-    watchdog_reboot (0,0,1000);
-  }else {
+    watchdog_reboot (0, 0, 1000);
+  } else {
     hardware_alarm_claim(coil_alarm_num);
     hardware_alarm_set_callback(coil_alarm_num, toggleCoil_isr);
   }
@@ -363,7 +330,7 @@ void setup() {
   }
   LittleFS.begin();
   delay(5000);
- // watchdog_enable(5000, 1); 
+  // watchdog_enable(5000, 1);
   resetQueuesAndTimers();
 
 }
@@ -381,7 +348,7 @@ void setCoil(bool activate, float duration = -1) {
   rp2040.fifo.push_nb((uint32_t) activate); //tell ADC loop that coil is on
   digitalWrite(actCoilPin, activate);
   if (duration > 0) {
-     hardware_alarm_set_target(coil_alarm_num, make_timeout_time_us(duration * mega));
+    hardware_alarm_set_target(coil_alarm_num, make_timeout_time_us(duration * mega));
   }
   if (activate) {
     coilOnTime = time_us_64();
@@ -389,19 +356,19 @@ void setCoil(bool activate, float duration = -1) {
   if (autoFlash == FIRE) {
     setLED(coilState ? 255 : 0);
   }
-//  setLedMessage(COIL_ON, activate);
+  //  setLedMessage(COIL_ON, activate);
 }
 
 void setLED (uint8_t level) {
   analogWrite(actLEDPin, level);
-  setLedMessage(LED_ON, level); 
+  setLedMessage(LED_ON, level);
 }
 
 
 void setGain(byte g) {
   digitalWrite(gainSet0, bitRead(g, 0));
   digitalWrite(gainSet1, bitRead(g, 1));
-  digitalWrite(gainSet2, bitRead(g,2));
+  digitalWrite(gainSet2, bitRead(g, 2));
   gainSetting = g;
 }
 
@@ -410,7 +377,7 @@ byte readGain() {
 }
 
 uint64_t getTime() {
-  return  time_us_64 (); 
+  return  time_us_64 ();
 
 }
 
@@ -419,7 +386,7 @@ void setLedMessage (LedMessageTypeT msg, bool setting) {
     digitalWrite(25, setting);
   }
   digitalWrite(indicatorPins[msg], setting);
-  
+
 }
 
 /*************** setup *************************************/
@@ -431,15 +398,15 @@ void setupPins() {
   pinMode(sda1Pin, INPUT_PULLUP);
   pinMode(scl0Pin, INPUT_PULLUP);
   pinMode(sda0Pin, INPUT_PULLUP);
-  
-  
+
+
   pinMode(gainSet0, OUTPUT);
   pinMode(gainSet1, OUTPUT);
   pinMode(gainSet2, OUTPUT);
   pinMode(i2cSel0, OUTPUT);
   pinMode(i2cSel1, OUTPUT);
   pinMode(i2cSel2, OUTPUT);
-  
+
   pinMode(actCoilPin, OUTPUT);
   pinMode(actLEDPin, OUTPUT);
   pinMode(resetIntegratorPin, OUTPUT);
@@ -447,18 +414,18 @@ void setupPins() {
   for (int j = 0; j < 8; ++j) {
     pinMode(indicatorPins[j], OUTPUT);
   }
-  
+
 }
 
 
 void setupMAG() {
 
   if (!hasMag) {
-    hasMag = mmcarr.begin(Wire,8);
-   // if (hasMag) {
-      mmcarr.enableAutomaticSetReset();
-      mmcarr.performSetOperation();
-      mmcarr.performResetOperation();
+    hasMag = mmcarr.begin(Wire, 8);
+    // if (hasMag) {
+    mmcarr.enableAutomaticSetReset();
+    mmcarr.performSetOperation();
+    mmcarr.performResetOperation();
     //}
   }
   setLedMessage(MAG_WORKS, hasMag);
@@ -467,7 +434,7 @@ void setupMAG() {
 
 
 
- 
+
 
 /**************** ISRs **********************************/
 
@@ -481,11 +448,10 @@ void toggleCoil_isr(uint alarm_num) {
 elapsedMillis loopT;
 int ctr = 0;
 void loop() {
- // watchdog_update();
-  //pollEvent();
+  // watchdog_update();
+  pollEvent();
 
- // pollADC();
-  pollMAG();
+  pollMeasurementFifo();
   pollTransmit();
   pollSerial();
   //pollMag moved to loop1
@@ -501,74 +467,37 @@ void setReadyForCrossing(bool r) {
 bool retrigger = false;
 
 //needs redo?
-uint8_t newDetector() {
-  if (rp2040.fifo.available() < 4) {
-    return 0;
-  }
-  uint32_t reading;
-  bool valid = true;
-  valid = valid && rp2040.fifo.pop_nb(&reading);
-  uint64_t us = setLowerHalf(getTime(), reading);
-  static uint64_t lastus = 0;
-  valid = valid && rp2040.fifo.pop_nb(&reading);
-  static bool wasdetector = true;
-  
-  bool isdetector = (bool) reading;
-  if (wasdetector && !isdetector) {
-    lastus = coilOnTime;
-  }
-  wasdetector = isdetector;
 
-  valid = valid && rp2040.fifo.pop_nb(&reading);
-  float det;
-  float coilAmps; //1.1 V = 1 amp
 
-  if (isdetector) {
-    det = vscaler*reading;
-  } else {
-    coilAmps = vscaler*reading/1.1; //1.1 V = 1 amp
-  }
- 
-  valid = valid && rp2040.fifo.pop_nb(&reading);
-  float ref = vscaler*reading;
-  float dus = us - lastus;
-  lastus = us;
-  if (!valid) {
-    return 0;
-  }
-  if (isdetector) {
-    lastReading.us = us;
-    coilReading.y = lastReading.val = det - ref - trimVoltage; //coilReading.y stores the last detector value before coil went on
-    coilReading.z = 0;
-    return 1;
-  } else {
-    coilReading.us = us;
-    coilReading.x = coilAmps;
-    coilReading.z += coilAmps*dus; //coil reading.z stores the integral of the coil current over the pulse; y*z/gain = energy in the pulse (in uJ)
-    return 2;
-  }
-  
-  
-}
 
 Reading3T crossingToReading(crossingT c) {
-   Reading3T r = {c.us, c.slope, c.counter, c.targetTime};
-   return r;
+  Reading3T r = {c.us, c.slope, c.counter, c.targetTime};
+  return r;
 }
 
-void pollADC (void) {
-
-  uint8_t whichread = 0;
-  if (! (whichread = newDetector())) { //single = intentional
+void pollMeasurementFifo() {
+  MeasurementDataT md;
+  if (!mmf.pop_nb(&md)) {
     return;
   }
-  if (enableDataTransmission) {
-    if (whichread == 1) {
-      analogTransmitFifo.unshift(lastReading);
-    } else {
-      coilTransmitFifo.unshift(coilReading);
-    }
+  if (isTransmissionEnabled(md.meas_type)) {
+    readingTransmitFifo.unshift(md);
   }
+  Reading1T lastReading;
+
+  if (md.meas_type == DETVAL) {
+    lastReading.val = md.data[0];
+    lastReading.us = md.meas_time;
+    crossingLogic(lastReading); //new detector means check for crossing
+  } 
+}
+
+void crossingLogic (Reading1T lastReading) {
+
+
+  static Reading1T lastHigh;
+  static Reading1T lastLow;
+
   bool high = false;
   bool low = false;
   if (readyForCrossing && abs(lastReading.val) > abs(hysteresis)) {
@@ -594,28 +523,21 @@ void pollADC (void) {
     crossingEstimatorFifo.push(lastReading);
   }
 
-  
+
 
   setLedMessage(AUTO_ON, autoFire);
 
   static bool crossing_led_on;
 
   if ( retrigger && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) {
-
-//    float dt = lastLow.us - lastHigh.us;
-//    float tm = 0.5 * lastLow.us + 0.5 * lastHigh.us;
-//    float dv = lastLow.val - lastHigh.val;
-//    float vm = 0.5 * (lastLow.val + lastHigh.val);
     crossingT crossing = calculateCrossing();
     crossing.counter = lastCrossing.counter + 1;
-//    crossing.us = tm - dv / dt * vm;
-//    crossing.slope = mega * dv / dt;
     period = crossing.us - twoCrossings.us;
     if (!enableDataTransmission) {
       sendMessage("crossing at " + String(crossing.us * micro) + " slope = " + String(crossing.slope) + " period = " + String(period * micro), 1);
     }
     if (autoFire && period < 8 * mega) {
-      crossing.targetTime = crossing.us + period * pulsePhase / 360 - pulseDuration*mega/2;
+      crossing.targetTime = crossing.us + period * pulsePhase / 360 - pulseDuration * mega / 2;
       setFiringAction(toTimeStamp(crossing.targetTime));
     }
     crossingTransmitFifo.push(crossingToReading(crossing));
@@ -632,34 +554,34 @@ void pollADC (void) {
 
 crossingT calculateCrossing() {
   //find t = mv + b -- intercept is crossing location: 1/m is the dv/dt slope
-  crossingT crossing = {0,0,0,0};
+  crossingT crossing = {0, 0, 0, 0};
   int n = crossingEstimatorFifo.size();
   float xx = 0, xy = 0, x = 0, y = 0;
-  float t,v,m,b,d;
+  float t, v, m, b, d;
   uint64_t t0 = crossingEstimatorFifo[0].us;
-  while(!crossingEstimatorFifo.isEmpty()){
-    Reading1T r= crossingEstimatorFifo.pop();
+  while (!crossingEstimatorFifo.isEmpty()) {
+    Reading1T r = crossingEstimatorFifo.pop();
     t = (float) (r.us - t0);
     v = r.val;
-    xx += v*v;
+    xx += v * v;
     y += t;
     x += v;
-    xy += v*t;
+    xy += v * t;
   }
-  d = (n*xx - x*x);
-  b = (xx*y - x*xy)/d;
-  crossing.us = (uint64_t) (b + t0); 
+  d = (n * xx - x * x);
+  b = (xx * y - x * xy) / d;
+  crossing.us = (uint64_t) (b + t0);
   //m = (n*xy - x*y)/d;
-  crossing.slope = mega*d/(n*xy - x*y); //dv/dt in volts / second
+  crossing.slope = mega * d / (n * xy - x * y); //dv/dt in volts / second
   return crossing;
 }
 
 /*
- * static int64_t absolute_time_diff_us ( absolute_time_t   from,
-absolute_time_t   to 
-) 
-(positive if to is after from except in case of overflow)
- */
+   static int64_t absolute_time_diff_us ( absolute_time_t   from,
+  absolute_time_t   to
+  )
+  (positive if to is after from except in case of overflow)
+*/
 bool timePassed (absolute_time_t targetTime) {
   return absolute_time_diff_us(get_absolute_time(), targetTime) <= 0;
 }
@@ -673,76 +595,58 @@ bool timePassed (uint64_t targetTime) {
 
 
 void pollMAG(void) {
+  static const TransmitTypeT magtype[8] = {MAG0, MAG1, MAG2, MAG3, MAG4, MAG5, MAG6, MAG7};
   bool dataready;
-  multiMagMeasurementT measurement;
-  if (true) { //(readDetector) { //don't read magnetometer when coil is energized
-    mmcarr.measurementCycle(getTime(), dataready, measurement);
+  multiMagMeasurementT reading;
+  MeasurementDataT md;
+  if (readDetector) { //don't read magnetometer when coil is energized
+    mmcarr.measurementCycle(getTime(), dataready, reading);
     if (dataready) {
-      //todo: semaphore/mutex if running on core 1
-        setLedMessage(MAG_WORKS, true);
-        magTransmitFifo.unshift(measurement);
-        setLedMessage(MAG_WORKS, true);
+      for (int j = 0; j < MAX_SENSORS; ++j) {
+        if (reading.sensorOnline[j]) {
+          md.data[0] = reading.x[j];
+          md.data[1] = reading.y[j];
+          md.data[2] = reading.z[j];
+          md.meas_type = magtype[j];
+          md.meas_time =  reading.us;
+          mmf.push_nb(md);
+        }
+      }
     }
+    
   }
 }
 
 
 
 void pollTransmit() {
-    static bool wastransmit = false;
-    if (enableDataTransmission && !wastransmit) {
-      sendSynchronization();
-    }
-    wastransmit = enableDataTransmission;
-
-    if (!crossingTransmitFifo.isEmpty()) {
-      
-      setLedMessage(TRANSMIT_SERIAL, true);
-      if (enableCrossingTransmission) {
-        sendReading(crossingTransmitFifo.pop(), CROSSING);
-      } else {
-        crossingTransmitFifo.pop();
-      }
-    }
-    
-    if (!analogTransmitFifo.isEmpty()) {
-      setLedMessage(TRANSMIT_SERIAL, true);
-      if (enableADCTransmission) {
-        sendReading(analogTransmitFifo.pop(), DETVAL);
-      } else {
-        analogTransmitFifo.pop();
-      }
-  
-      return;
-    }
-
-  if (!magTransmitFifo.isEmpty()) {
-    setLedMessage(TRANSMIT_SERIAL, true);
-    if (enableMagTransmission) {
-      sendReading(magTransmitFifo.pop(), MAGVEC);
-    } else {
-      magTransmitFifo.pop();
-    }
-    return;
+  static bool wastransmit = false;
+  if (enableDataTransmission && !wastransmit) {
+    sendSynchronization();
   }
-  
-  if (!coilTransmitFifo.isEmpty()) {
-    setLedMessage(TRANSMIT_SERIAL, true);
-    if (enableCoilTransmission) {
-      sendReading(coilTransmitFifo.pop(), COILI);
-    } else {
-      coilTransmitFifo.pop();
-    }
+  wastransmit = enableDataTransmission;
 
-    return;
+  if (!crossingTransmitFifo.isEmpty()) {
+
+    setLedMessage(TRANSMIT_SERIAL, true);
+    if (enableCrossingTransmission) {
+      sendReading(crossingTransmitFifo.pop(), CROSSING);
+    } else {
+      crossingTransmitFifo.pop();
+    }
   }
+
+  if (!readingTransmitFifo.isEmpty()) {
+    setLedMessage(TRANSMIT_SERIAL, true);
+    sendReading(readingTransmitFifo.pop());
+  }  
   setLedMessage(TRANSMIT_SERIAL, false);
 }
 
 void pollEvent() {
   if (!eventFifo.isEmpty() && eventCompleted) {
     if (scheduleEvent(eventFifo.last())) {
-      
+
       eventFifo.pop();
     }
   }
@@ -795,7 +699,7 @@ void addEvent (EventT event) {
   //make sure event is inserted in order, so that elements are sorted in order of descending us
   //(last is earliest event; first is latest event)
   //static int64_t absolute_time_diff_us  ( absolute_time_t   from, absolute_time_t   to )
-  //positive if to is after from except in case of overflow   
+  //positive if to is after from except in case of overflow
 
   while (!eventFifo.isEmpty() && absolute_time_diff_us(event.us, eventFifo.first().us) > 0) {
     scratchEventStack.push(eventFifo.shift());
@@ -807,16 +711,51 @@ void addEvent (EventT event) {
 }
 
 void sendSynchronization() {
-  float data[3] = {0,0,0};
+  float data[3] = {0, 0, 0};
   sendBinaryData (0, 0, data);
 }
 
-void sendReading (Reading1T reading, TransmitTypeT t) {
-  float data[3] = {0,0,0};
+inline bool isTransmissionEnabled(uint8_t t) {
+  return isTransmissionEnabled((TransmitTypeT) t);
+}
+
+bool isTransmissionEnabled(TransmitTypeT t) {
+  if (!enableDataTransmission) {
+    return false;
+  }
+  switch (t) {
+    case DETVAL:
+      return enableADCTransmission;
+      break;
+    case COILI:
+      return enableCoilTransmission;
+      break;
+    case MAGVEC: case MAG0: case MAG1: case MAG2: case MAG3: case MAG4: case MAG5: case MAG6: case MAG7:
+     return enableMagTransmission;
+     break;
+    case ACCVEC:
+     return enableAccTransmission;
+     break;
+    case CROSSING:
+     return enableCrossingTransmission;
+     break;
+    default:
+     return false;
+     break;
+  }
+  return false;
+}
+
+void sendReading(const MeasurementDataT &reading) {
+  sendBinaryData (reading.meas_type, reading.meas_time, reading.data);
+}
+
+void sendReading (const Reading1T &reading, TransmitTypeT t) {
+  float data[3] = {0, 0, 0};
   data[0] = reading.val;
   sendBinaryData ((uint8_t) t, reading.us, data);
 }
-void sendReading (Reading3T reading, TransmitTypeT t) {
+void sendReading (const Reading3T &reading, TransmitTypeT t) {
   float data[3];
   data[0] = reading.x;
   data[1] = reading.y;
@@ -838,14 +777,14 @@ void sendReading (const multiMagMeasurementT &reading, TransmitTypeT t) {
 }
 
 
-void sendBinaryData(uint8_t ttype, uint64_t us, float data[]) {
+void sendBinaryData(uint8_t ttype, uint64_t us, const float data[]) {
   //ttype is type of transmission
   //us is time in microseconds, lowest 48 bits sent - rollover in 9 years
 
-  if (!enableDataTransmission) {
+  if (!isTransmissionEnabled(ttype)) {
     return;
   }
-  
+
   uint8_t tbuff[20];
   tbuff[0] = ttype;
   memcpy(tbuff + 1, ((uint8_t *) &us), 6); //raspberry pi pico stores data little-endian (lsb first)
@@ -970,13 +909,13 @@ void parseCommand (CommandT c) {
       enableDataTransmission = c.data[0] > 0;
       enableADCTransmission = ((byte) c.data[0]) & ((byte) 1);
       enableMagTransmission = ((byte) c.data[0]) & ((byte) 2);
-     // enableAccTransmission = ((byte) c.data[0]) & ((byte) 4);
+      // enableAccTransmission = ((byte) c.data[0]) & ((byte) 4);
       enableCoilTransmission = ((byte) c.data[0]) & ((byte) 8);
       enableCrossingTransmission = ((byte) c.data[0]) & ((byte) 16);
       return;
     case 'V':
       verbosity = c.data[0];
-      sendMessage("verbosity set to " + String(c.data[0]),1);
+      sendMessage("verbosity set to " + String(c.data[0]), 1);
       return;
     case 'R':
       Serial.println(VERSION);
@@ -996,7 +935,7 @@ void parseCommand (CommandT c) {
       return;
     case '?':
       sendStatusMessage();
-      return;  
+      return;
     default:
       setLedMessage(BAD_MSG, true);
 
@@ -1040,10 +979,10 @@ int64_t eventCallback(alarm_id_t id, void *data) {
 }
 
 /*static alarm_id_t add_alarm_at  ( absolute_time_t   time,
-alarm_callback_t  callback,
-void *  user_data,
-bool  fire_if_past 
-) 
+  alarm_callback_t  callback,
+  void *  user_data,
+  bool  fire_if_past
+  )
 */
 bool scheduleEvent(EventT event) {
   nextEvent = event;
@@ -1052,7 +991,7 @@ bool scheduleEvent(EventT event) {
     eventCompleted = true;
   }
   if (rv > 0) {
-    eventCompleted = false; 
+    eventCompleted = false;
   }
   return (rv >= 0);
 }
@@ -1072,10 +1011,8 @@ void setTrimVoltage(float tv) {
 }
 
 void resetQueuesAndTimers() {
-  
-  analogTransmitFifo.clear();
-  coilTransmitFifo.clear();
-  magTransmitFifo.clear();
+
+  readingTransmitFifo.clear();
   crossingTransmitFifo.clear();
   commandStack.clear();
   eventFifo.clear();
@@ -1083,8 +1020,8 @@ void resetQueuesAndTimers() {
   setCoil(0);
   readyForCrossing = true;
   eventCompleted = true;
-  
-  
+
+
 }
 
 
@@ -1100,16 +1037,16 @@ void saveConfiguration () {
     return;
   }
 
- /*
- {
-    "pulseDuration": 0.003,
-    "pulsePhase": 40,
-    "hysteresis": 0.01,
-    "trimVoltage": 0,
-    "autoFire": true,
-    "retriggerDelay": 0.25
-  }
-  arduinojson.org/v6/assistant says 48 bytes required
+  /*
+    {
+     "pulseDuration": 0.003,
+     "pulsePhase": 40,
+     "hysteresis": 0.01,
+     "trimVoltage": 0,
+     "autoFire": true,
+     "retriggerDelay": 0.25
+    }
+    arduinojson.org/v6/assistant says 48 bytes required
   */
   StaticJsonDocument<144> doc;
 
@@ -1125,7 +1062,7 @@ void saveConfiguration () {
     sendMessage("serialization failed", 0);
     setLedMessage(PICO_ERROR, true);
   }
-  f.close();  
+  f.close();
 }
 
 
@@ -1138,24 +1075,24 @@ int loadConfiguration () {
     return 1;
   }
 
- /*
- {
-    "pulseDuration": 0.003,
-    "pulsePhase": 40,
-    "hysteresis": 0.01,
-    "trimVoltage": 0,
-    "autoFire": true,
-    "retriggerDelay": 0.25
-  }
-  arduinojson.org/v6/assistant says 48 bytes required
+  /*
+    {
+     "pulseDuration": 0.003,
+     "pulsePhase": 40,
+     "hysteresis": 0.01,
+     "trimVoltage": 0,
+     "autoFire": true,
+     "retriggerDelay": 0.25
+    }
+    arduinojson.org/v6/assistant says 48 bytes required
   */
   StaticJsonDocument<192> doc;
 
   DeserializationError error = deserializeJson(doc, f);
   if (error) {
-     sendMessage("deserialization failed", 0);
-     setLedMessage(PICO_ERROR, true);
-     return 2;
+    sendMessage("deserialization failed", 0);
+    setLedMessage(PICO_ERROR, true);
+    return 2;
   }
   pulseDuration = doc["pulseDuration"] | pulseDuration;
   pulsePhase = doc["pulsePhase"] | pulsePhase;
@@ -1170,6 +1107,6 @@ int loadConfiguration () {
     serializeJson(doc, Serial);
   }
 
-  f.close();  
+  f.close();
   return 0;
 }
