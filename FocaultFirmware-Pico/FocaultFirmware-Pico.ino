@@ -1,3 +1,5 @@
+#define CIRCULAR_BUFFER_INT_SAFE
+
 #include "pico/stdlib.h"
 #include <CircularBuffer.h>
 #include <Wire.h>
@@ -122,6 +124,7 @@ const int scl1Pin = 15;
 const int sda1Pin = 14;
 
 const int resetIntegratorPin = 0;
+const int builtInLED = 25;
 
 const int detectorPin = A2;
 const int refPin = A1;
@@ -135,7 +138,7 @@ const float radian = 57.295779513082321f;
 
 const uint32_t magPeriod = 3333; //us = 300 Hz
 
-const uint8_t indicatorPins[8] = {16, 17, 18, 19, 20, 21, 22, 12};
+const uint8_t indicatorPins[8] = {12,22,21,20,19,18,17,16};//{16, 17, 18, 19, 20, 21, 22, 12};
 
 /***************************************************************/
 /******************* configurations ***************************/
@@ -173,7 +176,7 @@ bool restarted = true;
 byte gainSetting;
 
 EventT nextEvent;
-bool eventCompleted = true;
+volatile bool eventCompleted = true;
 
 uint64_t coilOnTime;
 
@@ -219,6 +222,8 @@ void setupADC (void) {
   adc->startRecording(detectorPin - A0);
 }
 
+static bool doAutoZero = false;
+
 void analogReadFunctionCore1 (void) {
 
 
@@ -234,17 +239,50 @@ void analogReadFunctionCore1 (void) {
   } else {
     v_read.meas_type = (uint8_t) COILI;
   }
+
+  const int numAutoZero = 125;
+  static int autoZeroCounter = 125;
+  static float zeroValueIntegrator = 0.0;
+  static bool doingAutoZero = false;
+
+  if (doAutoZero) {
+      doingAutoZero = true;
+      zeroValueIntegrator = 0.0;
+      autoZeroCounter = 0;
+      doAutoZero = false;
+  }
+  
+  
   /** ---------- new reading ---------- */
   static bool failedToTransmit = false;
-  if (adc->getReading(v_read.data[0], v_read.meas_time) || failedToTransmit) {
-    failedToTransmit = !mmf.push_nb(v_read); //send reading to other core
-    if (!readDetector && !failedToTransmit) { //successful coil read
-      if  (--coilCountdown <= 0) {
-        digitalWrite(resetIntegratorPin, HIGH); //writing integrator pin low is handled elsewhere
-        adc->startRecording(detectorPin - A0);
-        readDetector = true;
+  bool newreading;
+  static float lastDetectorValue = 0;
+  if ((newreading = adc->getReading(v_read.data[0], v_read.meas_time, readDetector)) || failedToTransmit) { //one = intentional; subtract zero offset for detector, not coil
+    if (readDetector && newreading){
+      lastDetectorValue = v_read.data[0];
+      if (doingAutoZero) {
+        zeroValueIntegrator += v_read.data[0];
+        if (++autoZeroCounter >= numAutoZero) {
+          char buffer[128];
+          float oldzero = adc->getZeroVoltage();
+          adc->adjustZeroVoltage(zeroValueIntegrator/((float) autoZeroCounter));
+          sprintf(buffer, "zero was %.4f; integrator gives %.4f; increment is %.4f; new zero is %.4f", oldzero,zeroValueIntegrator, zeroValueIntegrator/((float) autoZeroCounter), adc->getZeroVoltage());                
+          sendMessage(buffer,1);       
+          doingAutoZero = false;
+        }
       }
     }
+    if (!readDetector && newreading) { //successful coil read
+      if  (--coilCountdown <= 0) {
+        resetIntegrator(true); //writing integrator pin low is handled elsewhere
+        adc->startRecording(detectorPin - A0);
+        readDetector = true;
+        v_read.data[1] = 11*v_read.data[0]; //in millicoulombs
+        v_read.data[2] = lastDetectorValue;
+      }
+    }
+    failedToTransmit = !mmf.push_nb(v_read); //send reading to other core
+
   }
   /** -------- coil turns on / off ----------- */
   uint32_t coilState;
@@ -282,9 +320,6 @@ void setup1 (void) {
 }
 
 void loop1(void) {
-  for (int j = 0; j < 8; ++j) {
-    digitalWrite(indicatorPins[j], LOW);
-  }
   analogReadFunctionCore1();
   pollMAG();
 }
@@ -348,15 +383,17 @@ void setup() {
 
 
 /********************* hardware control **************************/
-
+inline void resetIntegrator(bool state) {
+  digitalWrite(resetIntegratorPin, state);
+  digitalWrite(builtInLED, state);
+}
 
 
 void setCoil(bool activate, float duration = -1) {
   coilState = activate;
   if (activate) {
-    digitalWrite(resetIntegratorPin, LOW); //start integration
+    resetIntegrator(false); //start integration, reset brought high at end of next integration
   }
-  rp2040.fifo.push_nb((uint32_t) activate); //tell ADC loop that coil is on
   digitalWrite(actCoilPin, activate);
   if (duration > 0) {
     hardware_alarm_set_target(coil_alarm_num, make_timeout_time_us(duration * mega));
@@ -367,6 +404,8 @@ void setCoil(bool activate, float duration = -1) {
   if (autoFlash == FIRE) {
     setLED(coilState ? 255 : 0);
   }
+  rp2040.fifo.push_nb((uint32_t) activate); //tell ADC loop that coil is on
+
   //  setLedMessage(COIL_ON, activate);
 }
 
@@ -393,7 +432,6 @@ uint64_t getTime() {
 }
 
 void setLedMessage (LedMessageTypeT msg, bool setting) {
-  return; // bypass to use for other debugging
   if (msg == BAD_MSG) {
     digitalWrite(25, setting);
   }
@@ -422,6 +460,7 @@ void setupPins() {
   pinMode(actCoilPin, OUTPUT);
   pinMode(actLEDPin, OUTPUT);
   pinMode(resetIntegratorPin, OUTPUT);
+  pinMode(builtInLED, OUTPUT);
 
   for (int j = 0; j < 8; ++j) {
     pinMode(indicatorPins[j], OUTPUT);
@@ -452,7 +491,9 @@ void setupMAG() {
 
 
 void toggleCoil_isr(uint alarm_num) {
+  rp2040.idleOtherCore();
   setCoil(!coilState, -1);
+  rp2040.resumeOtherCore();
 }
 
 /*********** polling ********************************/
@@ -656,7 +697,7 @@ void pollTransmit() {
 
 void pollEvent() {
   if (!eventFifo.isEmpty() && eventCompleted) {
-    if (scheduleEvent(eventFifo.last())) {
+    if (scheduleEvent(eventFifo.last())) { //event was successfully scheduled
 
       eventFifo.pop();
     }
@@ -867,9 +908,11 @@ absolute_time_t toTimeStamp(uint64_t us) {
 void parseCommand (CommandT c) {
   EventT event;
   switch (toupper(c.cmd)) {
-    case 'G': //gain and trim voltage
+    case 'G': //gain and autoZero
       setGain((uint8_t) c.data[0]);
-      setTrimVoltage(c.data[1]);
+      if (c.data[1] > 0) {
+        doAutoZero = true;
+      }
       return;
     case 'C':
       if (c.us <= getTime()) {
@@ -1009,10 +1052,7 @@ bool scheduleEvent(EventT event) {
 
 
 void sendMessage(String msg, int v) {
-  if (enableDataTransmission) {
-    return;
-  }
-  if (verbosity >= v) {
+  if (!enableDataTransmission && verbosity >= v) {
     Serial.println(msg);
   }
 }
