@@ -311,11 +311,28 @@ void setup1 (void) {
 
   Wire.setSDA(sda0Pin);
   Wire.setSCL(scl0Pin);
-  Wire.setClock(200000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
  
   Wire.begin();
 
-  setupMAG();
+ Wire.setClock(400000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
+  setupMAG(4);
+//  Serial.println("400k");
+//  for (int j = 0; j < 4; ++j) {
+//    Serial.print("Sensor "); Serial.print(j); Serial.println(mmcarr.isSensorActive(j) ? " working" : " not working");
+//  }
+//  Wire.setClock(100000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
+//  setupMAG(4);
+//  Serial.println("100k");
+//  for (int j = 0; j < 4; ++j) {
+//    Serial.print("Sensor "); Serial.print(j); Serial.println(mmcarr.isSensorActive(j) ? " working" : " not working");
+//  }
+//  Wire.setClock(10000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
+//  setupMAG(4);
+//  Serial.println("10k");
+//  for (int j = 0; j < 4; ++j) {
+//    Serial.print("Sensor "); Serial.print(j); Serial.println(mmcarr.isSensorActive(j) ? " working" : " not working");
+//  }
+  
   setupADC();
 }
 
@@ -469,10 +486,10 @@ void setupPins() {
 }
 
 
-void setupMAG() {
+void setupMAG(int nsensors) {
 
   if (!hasMag) {
-    hasMag = mmcarr.begin(Wire, 8);
+    hasMag = mmcarr.begin(Wire, nsensors);
     // if (hasMag) {
     mmcarr.enableAutomaticSetReset();
     mmcarr.performSetOperation();
@@ -656,9 +673,9 @@ void pollMAG(void) {
     if (dataready) {
       for (int j = 0; j < MAX_SENSORS; ++j) {
         if (reading.sensorOnline[j]) {
-          md.data[0] = reading.x[j];
-          md.data[1] = reading.y[j];
-          md.data[2] = reading.z[j];
+          md.data[0] = reading.x[j] - reading.zero_x[j];
+          md.data[1] = reading.y[j] - reading.zero_y[j];
+          md.data[2] = reading.z[j] - reading.zero_z[j];
           md.meas_type = magtype[j];
           md.meas_time =  reading.us;
           mmf.push_nb(md);
@@ -911,10 +928,13 @@ void parseCommand (CommandT c) {
     case 'G': //gain and autoZero
       setGain((uint8_t) c.data[0]);
       if (c.data[1] > 0) {
-        doAutoZero = true;
+        doAutoZero = true; // auto-zero voltage 
+      }
+      if (c.data[2] > 0) {
+        mmcarr.autoZeroSensors(c.data[2]); //auto-zero magnetometers
       }
       return;
-    case 'C':
+    case 'C': //activate coil
       if (c.us <= getTime()) {
         setCoil(true, c.data[0]);
       } else {
@@ -926,7 +946,7 @@ void parseCommand (CommandT c) {
       }
 
       return;
-    case 'D':
+    case 'D': //deactivate coil
       if (c.us <= getTime()) {
         setCoil(false);
       } else {
@@ -937,7 +957,7 @@ void parseCommand (CommandT c) {
         addEvent(event);
       }
       return;
-    case 'L':
+    case 'L': //set led
       if (c.us <= getTime()) {
         setLED(c.data[0]);
       } else {
@@ -947,7 +967,7 @@ void parseCommand (CommandT c) {
         addEvent(event);
       }
       return;
-    case 'A':
+    case 'A': //autofire
       pulseDuration = c.data[0];
       pulsePhase = c.data[1];
       hysteresis = c.data[2];
@@ -959,7 +979,7 @@ void parseCommand (CommandT c) {
         sendMessage("auto disabled", 1);
       }
       return;
-    case 'T':
+    case 'T': //enable data transmission
       enableDataTransmission = c.data[0] > 0;
       enableADCTransmission = ((byte) c.data[0]) & ((byte) 1);
       enableMagTransmission = ((byte) c.data[0]) & ((byte) 2);
@@ -967,27 +987,27 @@ void parseCommand (CommandT c) {
       enableCoilTransmission = ((byte) c.data[0]) & ((byte) 8);
       enableCrossingTransmission = ((byte) c.data[0]) & ((byte) 16);
       return;
-    case 'V':
+    case 'V': //set verbosity
       verbosity = c.data[0];
       sendMessage("verbosity set to " + String(c.data[0]), 1);
       return;
-    case 'R':
+    case 'R': //send version
       Serial.println(VERSION);
       return;
-    case 'F':
+    case 'F': //set autoflash
       autoFlash = (FlashT) c.data[0];
       return;
-    case 'X': //changed from S
+    case 'X': //changed from S - send configuration
       sendSynchronization();
       sendSynchronization();
       return;
-    case 'Q':
+    case 'Q': //reset queues and timers
       resetQueuesAndTimers();
       return;
-    case 'S':
+    case 'S': //save configuration
       saveConfiguration();
       return;
-    case '?':
+    case '?': //send status message
       sendStatusMessage();
       return;
     default:
@@ -1011,6 +1031,10 @@ void sendStatusMessage() {
   if (serializeJson(doc, Serial) == 0) {
     sendMessage("serialization failed", 0);
     setLedMessage(PICO_ERROR, true);
+  }
+  Serial.println();
+  for (int j = 0; j < 8; ++j) {
+    Serial.print("Sensor "); Serial.print(j); Serial.println(mmcarr.isSensorActive(j) ? " working" : " not working");
   }
 }
 
