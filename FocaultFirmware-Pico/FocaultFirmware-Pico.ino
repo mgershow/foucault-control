@@ -150,7 +150,7 @@ bool autoFire = true; //whether to auto fire
 float retriggerDelay = 0.25; //seconds AFTER pulse delivery
 
 float vref = 1.25;
-int verbosity = 100;
+int verbosity = -1;
 
 const char *configname = "config.txt";
 
@@ -304,7 +304,7 @@ void analogReadFunctionCore1 (void) {
 //
 void setup1 (void) {
 
-  delay(5000);
+  delay(500);
   mmf.begin();
 
 
@@ -353,9 +353,9 @@ void setup() {
   setLedMessage(AUTO_ON, false);
   Serial.begin(9600);
   elapsedMillis serialWait;
-  while (!Serial) {
-    delay(100);
-  }
+//  while (!Serial) {
+//    delay(100);
+//  }
   LittleFS.begin();
   if (loadConfiguration()) {
     //error loading configuration, save defaults
@@ -392,7 +392,7 @@ void setup() {
     verbosity = -1;
   }
   LittleFS.begin();
-  delay(5000);
+  delay(500);
   // watchdog_enable(5000, 1);
   resetQueuesAndTimers();
 
