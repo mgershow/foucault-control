@@ -25,7 +25,7 @@
 #define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
 
-#define VERSION 10
+#define VERSION 11
 
 
 MHG_MMC5603NJ_Array mmcarr = MHG_MMC5603NJ_Array();
@@ -314,7 +314,7 @@ void setup1 (void) {
  
   Wire.begin();
 
- Wire.setClock(400000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
+ Wire.setClock(100000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
   setupMAG(4);
 //  Serial.println("400k");
 //  for (int j = 0; j < 4; ++j) {
@@ -353,7 +353,7 @@ void setup() {
   setLedMessage(AUTO_ON, false);
   Serial.begin(9600);
   elapsedMillis serialWait;
-  while (!Serial ) {
+  while (!Serial) {
     delay(100);
   }
   LittleFS.begin();
@@ -384,9 +384,9 @@ void setup() {
     hardware_alarm_set_callback(coil_alarm_num, toggleCoil_isr);
   }
 
-  sendMessage("setup complete", 1);
+ // sendMessage("setup complete", 1);
   byte g = readGain();
-  sendMessage("gain = " + String(g), 1);
+//  sendMessage("gain = " + String(g), 1);
 
   if (enableDataTransmission) {
     verbosity = -1;
@@ -452,7 +452,7 @@ void setLedMessage (LedMessageTypeT msg, bool setting) {
   if (msg == BAD_MSG) {
     digitalWrite(25, setting);
   }
-  digitalWrite(indicatorPins[msg], setting);
+ // digitalWrite(indicatorPins[msg], setting);
 
 }
 
@@ -495,6 +495,9 @@ void setupMAG(int nsensors) {
     mmcarr.performSetOperation();
     mmcarr.performResetOperation();
     //}
+  }
+  for (int j = 0; j < nsensors; ++j) {
+    digitalWrite(indicatorPins[j], mmcarr.isSensorActive(j));
   }
   setLedMessage(MAG_WORKS, hasMag);
 }
