@@ -155,7 +155,7 @@
 				<Property Name="Bld_localDestDirType" Type="Str">relativeToCommon</Property>
 				<Property Name="Bld_modifyLibraryFile" Type="Bool">true</Property>
 				<Property Name="Bld_previewCacheID" Type="Str">{014C67BE-EFC4-4BA3-B79C-A5EE4C0245B6}</Property>
-				<Property Name="Bld_version.build" Type="Int">30</Property>
+				<Property Name="Bld_version.build" Type="Int">31</Property>
 				<Property Name="Bld_version.major" Type="Int">1</Property>
 				<Property Name="Destination[0].destName" Type="Str">Foucalt Control Panel.exe</Property>
 				<Property Name="Destination[0].path" Type="Path">../builds/NI_AB_PROJECTNAME/Application/Foucalt Control Panel.exe</Property>
@@ -164,7 +164,7 @@
 				<Property Name="Destination[1].destName" Type="Str">Support Directory</Property>
 				<Property Name="Destination[1].path" Type="Path">../builds/NI_AB_PROJECTNAME/Application/data</Property>
 				<Property Name="DestinationCount" Type="Int">2</Property>
-				<Property Name="Source[0].itemID" Type="Str">{9FD08AAF-5FA4-4094-890C-C6649FFA5A12}</Property>
+				<Property Name="Source[0].itemID" Type="Str">{A2A69DB5-3368-490C-835D-0DFED6489358}</Property>
 				<Property Name="Source[0].type" Type="Str">Container</Property>
 				<Property Name="Source[1].destinationIndex" Type="Int">0</Property>
 				<Property Name="Source[1].itemID" Type="Ref">/My Computer/foucault control panel.vi</Property>
@@ -283,7 +283,7 @@
 				<Property Name="INST_buildSpecName" Type="Str">foucault control installer</Property>
 				<Property Name="INST_defaultDir" Type="Str">{AF813D56-CD50-4F37-8597-48D1AB98F45A}</Property>
 				<Property Name="INST_productName" Type="Str">foucault control</Property>
-				<Property Name="INST_productVersion" Type="Str">1.0.27</Property>
+				<Property Name="INST_productVersion" Type="Str">1.0.28</Property>
 				<Property Name="InstSpecBitness" Type="Str">32-bit</Property>
 				<Property Name="InstSpecVersion" Type="Str">17018010</Property>
 				<Property Name="MSI_arpCompany" Type="Str">NYU</Property>
