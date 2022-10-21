@@ -25,7 +25,7 @@
 #define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
 
-#define VERSION 11
+#define VERSION 12
 
 
 MHG_MMC5603NJ_Array mmcarr = MHG_MMC5603NJ_Array();
@@ -123,6 +123,8 @@ const int scl0Pin = 5;
 const int scl1Pin = 15;
 const int sda1Pin = 14;
 
+const int detectorPolarityPin = 13;
+
 const int resetIntegratorPin = 0;
 const int builtInLED = 25;
 
@@ -179,6 +181,8 @@ EventT nextEvent;
 volatile bool eventCompleted = true;
 
 uint64_t coilOnTime;
+
+bool useDetectorPolarity = false;
 
 /*********************** core1 analog read ***********************/
 
@@ -356,6 +360,9 @@ void setup() {
 //  while (!Serial) {
 //    delay(100);
 //  }
+
+   attachInterrupt(digitalPinToInterrupt(detectorPolarityPin), detectorChangeInterrupt, CHANGE);
+
   LittleFS.begin();
   if (loadConfiguration()) {
     //error loading configuration, save defaults
@@ -387,6 +394,9 @@ void setup() {
  // sendMessage("setup complete", 1);
   byte g = readGain();
 //  sendMessage("gain = " + String(g), 1);
+
+  verbosity = -1;
+  enableDataTransmission = false;
 
   if (enableDataTransmission) {
     verbosity = -1;
@@ -483,6 +493,7 @@ void setupPins() {
     pinMode(indicatorPins[j], OUTPUT);
   }
 
+  pinMode(detectorPolarityPin, INPUT);
 }
 
 
@@ -564,6 +575,11 @@ void pollMeasurementFifo() {
   } 
 }
 
+absolute_time_t lastDetectorChange;
+void detectorChangeInterrupt() {
+  lastDetectorChange = get_absolute_time();
+}
+
 void crossingLogic (Reading1T lastReading) {
 
 
@@ -600,11 +616,19 @@ void crossingLogic (Reading1T lastReading) {
   setLedMessage(AUTO_ON, autoFire);
 
   static bool crossing_led_on;
-
+    
   if ( retrigger && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) {
     crossingT crossing = calculateCrossing();
+    
+
+    //changed 10-20 version 12; now use analog detector change time to set crossing time
+    if (useDetectorPolarity) {
+      crossing.us =  to_us_since_boot(lastDetectorChange);  
+    }
+
     crossing.counter = lastCrossing.counter + 1;
     period = crossing.us - twoCrossings.us;
+
     if (!enableDataTransmission) {
       sendMessage("crossing at " + String(crossing.us * micro) + " slope = " + String(crossing.slope) + " period = " + String(period * micro), 1);
     }
@@ -647,6 +671,7 @@ crossingT calculateCrossing() {
   crossing.slope = mega * d / (n * xy - x * y); //dv/dt in volts / second
   return crossing;
 }
+
 
 /*
    static int64_t absolute_time_diff_us ( absolute_time_t   from,
@@ -974,6 +999,7 @@ void parseCommand (CommandT c) {
       pulseDuration = c.data[0];
       pulsePhase = c.data[1];
       hysteresis = c.data[2];
+      useDetectorPolarity = c.data[3] > 0;
       if (c.data[0] > 0) {
         autoFire = true;
         sendMessage("auto enabled", 1);
