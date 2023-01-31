@@ -155,7 +155,7 @@
 				<Property Name="Bld_localDestDirType" Type="Str">relativeToCommon</Property>
 				<Property Name="Bld_modifyLibraryFile" Type="Bool">true</Property>
 				<Property Name="Bld_previewCacheID" Type="Str">{014C67BE-EFC4-4BA3-B79C-A5EE4C0245B6}</Property>
-				<Property Name="Bld_version.build" Type="Int">38</Property>
+				<Property Name="Bld_version.build" Type="Int">39</Property>
 				<Property Name="Bld_version.major" Type="Int">1</Property>
 				<Property Name="Destination[0].destName" Type="Str">Foucalt Control Panel.exe</Property>
 				<Property Name="Destination[0].path" Type="Path">../builds/NI_AB_PROJECTNAME/Application/Foucalt Control Panel.exe</Property>
@@ -283,7 +283,7 @@
 				<Property Name="INST_buildSpecName" Type="Str">foucault control installer</Property>
 				<Property Name="INST_defaultDir" Type="Str">{AF813D56-CD50-4F37-8597-48D1AB98F45A}</Property>
 				<Property Name="INST_productName" Type="Str">foucault control</Property>
-				<Property Name="INST_productVersion" Type="Str">1.0.35</Property>
+				<Property Name="INST_productVersion" Type="Str">1.0.36</Property>
 				<Property Name="InstSpecBitness" Type="Str">32-bit</Property>
 				<Property Name="InstSpecVersion" Type="Str">17018010</Property>
 				<Property Name="MSI_arpCompany" Type="Str">NYU</Property>
