@@ -6,6 +6,8 @@
 #include <EEPROM.h>
 #include <elapsedMillis.h>
 #include "pico/multicore.h"
+#include "tusb.h"
+
 #include "hardware/adc.h"
 #include "hardware/watchdog.h"
 #include <ArduinoJson.h>
@@ -25,7 +27,7 @@
 #define NUM_ACT_DATA 4
 #define CHAR_BUF_SIZE 128
 
-#define VERSION 12
+#define VERSION 13
 
 
 MHG_MMC5603NJ_Array mmcarr = MHG_MMC5603NJ_Array();
@@ -39,6 +41,8 @@ bool enableMagTransmission = true;
 bool enableAccTransmission = true;
 bool enableCoilTransmission = true;
 bool enableCrossingTransmission = true;
+
+static bool core1_launched = false;
 
 typedef enum {NONE, FIRE, CROSS} FlashT;
 FlashT autoFlash = NONE;
@@ -184,6 +188,8 @@ uint64_t coilOnTime;
 
 bool useDetectorPolarity = false;
 
+absolute_time_t resetCounter;
+
 /*********************** core1 analog read ***********************/
 
 uint32_t getLow(uint64_t val) {
@@ -216,6 +222,7 @@ uint64_t setLowerHalf (uint64_t val, uint32_t newlow) {
 }
 
 static bool readDetector = true;
+static bool doAutoZero = false;
 
 void setupADC (void) {
   adc_init();
@@ -226,20 +233,41 @@ void setupADC (void) {
   adc->startRecording(detectorPin - A0);
 }
 
-static bool doAutoZero = false;
+
+void resetADC () {
+  adc->stopReading();
+  delay(1);
+
+  adc_run(false);
+  adc_irq_set_enabled(false);
+  
+  //adc_init();
+  adc_gpio_init(detectorPin);
+  adc_gpio_init(refPin);
+  adc_gpio_init(coilIPin);
+  adc->releaseDMA();
+  adc->startRecording(detectorPin - A0);
+  readDetector = true;
+  digitalWrite(indicatorPins[3], !digitalRead(indicatorPins[3]));
+}
 
 void analogReadFunctionCore1 (void) {
 
-
-  
   static bool coilActive = false;
   static int coilCountdown = 3;
+  static absolute_time_t lastReadingTime = get_absolute_time();
+  const uint64_t max_interread_interval = 100000; //100 ms between reads would be WAY too long
+  static absolute_time_t restartReadingTime = get_absolute_time();
+  static bool waitingForReading = false;
+  static bool discardReading = false; //use to discard first reading after transition 
 
   MeasurementDataT v_read;
 
+  digitalWrite(indicatorPins[1], readDetector);
+
   if (readDetector) {
     v_read.meas_type = (uint8_t) DETVAL;
-
+    
   } else {
     v_read.meas_type = (uint8_t) COILI;
   }
@@ -261,7 +289,25 @@ void analogReadFunctionCore1 (void) {
   static bool failedToTransmit = false;
   bool newreading;
   static float lastDetectorValue = 0;
+  static uint8_t counter = 0;
+
+
+  if (waitingForReading && timePassed(restartReadingTime)) {
+    waitingForReading = false;
+    if (readDetector) {
+      adc->startRecording(detectorPin - A0);
+    } else {
+      adc->startRecording(coilIPin - A0);
+    }
+    discardReading = true;
+  }
+  
   if ((newreading = adc->getReading(v_read.data[0], v_read.meas_time, readDetector)) || failedToTransmit) { //one = intentional; subtract zero offset for detector, not coil
+    lastReadingTime = get_absolute_time();
+    if (++counter == 0) {
+      digitalWrite(indicatorPins[2], !digitalRead(indicatorPins[2]));
+      digitalWrite(indicatorPins[3], LOW);
+    }
     if (readDetector && newreading){
       lastDetectorValue = v_read.data[0];
       if (doingAutoZero) {
@@ -279,23 +325,32 @@ void analogReadFunctionCore1 (void) {
     if (!readDetector && newreading) { //successful coil read
       if  (--coilCountdown <= 0) {
         resetIntegrator(true); //writing integrator pin low is handled elsewhere
-        adc->startRecording(detectorPin - A0);
         readDetector = true;
+        waitingForReading= true;
+        adc->stopReading();
+        restartReadingTime = delayed_by_us(get_absolute_time(), 1000); //wait 1 ms to restart reading
         v_read.data[1] = 11*v_read.data[0]; //in millicoulombs
         v_read.data[2] = lastDetectorValue;
       }
     }
-    failedToTransmit = !mmf.push_nb(v_read); //send reading to other core
-
+    if (discardReading) { //don't send first completed reading after a transition
+      failedToTransmit = false;
+      discardReading = false;
+    } else {
+      failedToTransmit = !mmf.push_nb(v_read); //send reading to other core
+    }  
   }
   /** -------- coil turns on / off ----------- */
   uint32_t coilState;
   if (rp2040.fifo.pop_nb(&coilState)) {
 
     if (coilState && !coilActive) {
-      coilCountdown = 1000; //read coil integral continuously when coil is on
+      coilCountdown = 1000000; //read coil integral continuously when coil is on
       adc->startRecording(coilIPin - A0);
       readDetector = false;
+      waitingForReading= true;
+      adc->stopReading();
+      restartReadingTime = delayed_by_us(get_absolute_time(), 500); //wait ~0.5 ms to restart reading
     }
     if (!coilState && coilActive) {
       //coil shuts off
@@ -304,55 +359,73 @@ void analogReadFunctionCore1 (void) {
     coilActive = (bool) coilState;
 
   }
+  if (absolute_time_diff_us(lastReadingTime,get_absolute_time()) > max_interread_interval) {
+    resetADC();
+    lastReadingTime = get_absolute_time();
+  }
 }
 //
 void setup1 (void) {
 
-  delay(500);
-  mmf.begin();
-
-
-
-  Wire.setSDA(sda0Pin);
-  Wire.setSCL(scl0Pin);
- 
-  Wire.begin();
-
- Wire.setClock(100000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
-  setupMAG(4);
-//  Serial.println("400k");
-//  for (int j = 0; j < 4; ++j) {
-//    Serial.print("Sensor "); Serial.print(j); Serial.println(mmcarr.isSensorActive(j) ? " working" : " not working");
-//  }
-//  Wire.setClock(100000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
-//  setupMAG(4);
-//  Serial.println("100k");
-//  for (int j = 0; j < 4; ++j) {
-//    Serial.print("Sensor "); Serial.print(j); Serial.println(mmcarr.isSensorActive(j) ? " working" : " not working");
-//  }
-//  Wire.setClock(10000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
-//  setupMAG(4);
-//  Serial.println("10k");
-//  for (int j = 0; j < 4; ++j) {
-//    Serial.print("Sensor "); Serial.print(j); Serial.println(mmcarr.isSensorActive(j) ? " working" : " not working");
-//  }
+  digitalWrite(indicatorPins[4], !digitalRead(indicatorPins[4]));
+  if (!core1_launched) {
+    mmf.begin();
+    Wire.setSDA(sda0Pin);
+    Wire.setSCL(scl0Pin);
+    Wire.begin();
+    Wire.setClock(100000); //down from 400k to see if that helps with i2c dropout //todo implement i2c_clearbus from (http://www.forward.com.au/pfod/ArduinoProgramming/I2C_ClearBus/index.html)(see osa.ino)
+    setupMAG(4); 
+    setupADC();
+    core1_launched = true;
+    digitalWrite(indicatorPins[4], LOW);
+  }else {
+    resetADC();
+    MeasurementDataT empty;
+    while (mmf.pop_nb(&empty)) {
+      //empty queue
+    }
+  }
+  doAutoZero = false;
   
-  setupADC();
+
 }
 
 void loop1(void) {
   analogReadFunctionCore1();
   pollMAG();
+  static uint8_t counter = 0;
+  if (++counter == 0) {
+    digitalWrite(indicatorPins[0], !digitalRead(indicatorPins[0]));
+  }
+  
 }
 
 /********************  core0 all others ********************************/
+
+void pingResetCounter(void) {
+  resetCounter = get_absolute_time();
+  static uint8_t counter = 0;
+  if (++counter == 0) {
+    digitalWrite(indicatorPins[7], !digitalRead(indicatorPins[7]));
+  }
+}
+
+void pollResetCounter(void) {
+  const int64_t maxDelay = 10000000; //10 seconds
+  if (absolute_time_diff_us (resetCounter, get_absolute_time()) > maxDelay) {
+      resetQueuesAndTimers(true);
+  }
+}
 
 
 
 void setup() {
   // put your setup code here, to run once:
   setupPins();
-  setLedMessage(WATCHDOG_REBOOT, watchdog_caused_reboot());
+ // setLedMessage(WATCHDOG_REBOOT, watchdog_caused_reboot());
+  if (watchdog_caused_reboot()) {
+    
+  }
   autoFire = false;
   setLedMessage(AUTO_ON, false);
   Serial.begin(9600);
@@ -403,8 +476,8 @@ void setup() {
   }
   LittleFS.begin();
   delay(500);
-  // watchdog_enable(5000, 1);
-  resetQueuesAndTimers();
+  //watchdog_enable(5000, 1);
+  resetQueuesAndTimers(false);
 
 }
 
@@ -412,7 +485,7 @@ void setup() {
 /********************* hardware control **************************/
 inline void resetIntegrator(bool state) {
   digitalWrite(resetIntegratorPin, state);
-  digitalWrite(builtInLED, state);
+ // digitalWrite(builtInLED, state);
 }
 
 
@@ -431,7 +504,7 @@ void setCoil(bool activate, float duration = -1) {
   if (autoFlash == FIRE) {
     setLED(coilState ? 255 : 0);
   }
-  rp2040.fifo.push_nb((uint32_t) activate); //tell ADC loop that coil is on
+  rp2040.fifo.push_nb((uint32_t) activate); //tell ADC loop that coil is on/off
 
   //  setLedMessage(COIL_ON, activate);
 }
@@ -488,6 +561,7 @@ void setupPins() {
   pinMode(actLEDPin, OUTPUT);
   pinMode(resetIntegratorPin, OUTPUT);
   pinMode(builtInLED, OUTPUT);
+  digitalWrite(builtInLED, LOW);
 
   for (int j = 0; j < 8; ++j) {
     pinMode(indicatorPins[j], OUTPUT);
@@ -507,9 +581,9 @@ void setupMAG(int nsensors) {
     mmcarr.performResetOperation();
     //}
   }
-  for (int j = 0; j < nsensors; ++j) {
-    digitalWrite(indicatorPins[j], mmcarr.isSensorActive(j));
-  }
+//  for (int j = 0; j < nsensors; ++j) {
+//    digitalWrite(indicatorPins[j], mmcarr.isSensorActive(j));
+//  }
   setLedMessage(MAG_WORKS, hasMag);
 }
 
@@ -532,14 +606,19 @@ void toggleCoil_isr(uint alarm_num) {
 elapsedMillis loopT;
 int ctr = 0;
 void loop() {
-  // watchdog_update();
+  watchdog_update();
+  digitalWrite(builtInLED, tud_cdc_connected());
   pollEvent();
 
   pollMeasurementFifo();
   pollTransmit();
   pollSerial();
+  pollResetCounter();
   //pollMag moved to loop1
-
+  static uint16_t counter = 0;
+  if (++counter == 0) {
+    digitalWrite(indicatorPins[6], !digitalRead(indicatorPins[6]));
+  }
 }
 
 
@@ -563,6 +642,7 @@ void pollMeasurementFifo() {
   if (!mmf.pop_nb(&md)) {
     return;
   }
+ 
   if (isTransmissionEnabled(md.meas_type)) {
     readingTransmitFifo.unshift(md);
   }
@@ -572,6 +652,7 @@ void pollMeasurementFifo() {
     lastReading.val = md.data[0];
     lastReading.us = md.meas_time;
     crossingLogic(lastReading); //new detector means check for crossing
+    pingResetCounter(); //transmission is working between cores -- remove this if we are still having problem with data transmission dropping out
   } 
 }
 
@@ -617,7 +698,8 @@ void crossingLogic (Reading1T lastReading) {
 
   static bool crossing_led_on;
     
-  if ( retrigger && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) {
+  if ( retrigger && ((hysteresis < 0 && lastLow.us > lastHigh.us) || (hysteresis > 0 && lastHigh.us > lastLow.us))) { //a crossing detected
+    pingResetCounter(); //everything is working if we detect a crossing
     crossingT crossing = calculateCrossing();
     
 
@@ -760,6 +842,11 @@ void pollSerial() {
 /********** other ****************/
 
 void setFiringAction(absolute_time_t us) {
+  int64_t timeFromNow = absolute_time_diff_us(get_absolute_time(), us);
+  if (timeFromNow < 0 || timeFromNow > 4E6) {
+    return; //don't set nonsense times
+  }
+  
   restarted = false;
   setReadyForCrossing(false);
   EventT event;
@@ -878,7 +965,7 @@ void sendBinaryData(uint8_t ttype, uint64_t us, const float data[]) {
   //ttype is type of transmission
   //us is time in microseconds, lowest 48 bits sent - rollover in 9 years
 
-  if (!isTransmissionEnabled(ttype)) {
+  if (!isTransmissionEnabled(ttype) || (Serial.availableForWrite() < 20) || !tud_cdc_connected()) {
     return;
   }
 
@@ -896,7 +983,7 @@ void sendBinaryData(uint8_t ttype, uint64_t us, const float data[]) {
 
 int readLineSerial(char buff[], int buffersize, unsigned int timeout) {
   int i = 0;
-  if (!Serial) {
+  if (!Serial || !tud_cdc_connected()) {
     return 0;
   }
   if (!Serial.available()) {
@@ -1021,7 +1108,9 @@ void parseCommand (CommandT c) {
       sendMessage("verbosity set to " + String(c.data[0]), 1);
       return;
     case 'R': //send version
-      Serial.println(VERSION);
+      if (tud_cdc_connected()) {
+        Serial.println(VERSION);
+      }
       return;
     case 'F': //set autoflash
       autoFlash = (FlashT) c.data[0];
@@ -1031,7 +1120,7 @@ void parseCommand (CommandT c) {
       sendSynchronization();
       return;
     case 'Q': //reset queues and timers
-      resetQueuesAndTimers();
+      resetQueuesAndTimers(true);
       return;
     case 'S': //save configuration
       saveConfiguration();
@@ -1047,6 +1136,9 @@ void parseCommand (CommandT c) {
 
 void sendStatusMessage() {
   StaticJsonDocument<144> doc;
+  if (!!tud_cdc_connected()) {
+    return;
+  }
 
   doc["pulseDuration"] = pulseDuration;
   doc["pulsePhase"] = pulsePhase;
@@ -1105,7 +1197,7 @@ bool scheduleEvent(EventT event) {
 
 
 void sendMessage(String msg, int v) {
-  if (!enableDataTransmission && verbosity >= v) {
+  if (tud_cdc_connected() && !enableDataTransmission && verbosity >= v && Serial.availableForWrite() > 0) {
     Serial.println(msg);
   }
 }
@@ -1114,17 +1206,31 @@ void setTrimVoltage(float tv) {
   trimVoltage = tv;
 }
 
-void resetQueuesAndTimers() {
+void resetQueuesAndTimers(bool resetCore1) {
 
+ 
+  
+  if (resetCore1) {
+      resetQueuesAndTimers(false);
+      noInterrupts();
+      rp2040.idleOtherCore();
+      rp2040.restartCore1();
+      rp2040.resumeOtherCore();
+      interrupts();
+      delay(10);
+      digitalWrite(indicatorPins[5], !digitalRead(indicatorPins[5]));
+  }
+  detectorReadingFifo.clear();
   readingTransmitFifo.clear();
   crossingTransmitFifo.clear();
   commandStack.clear();
   eventFifo.clear();
+  crossingEstimatorFifo.clear();
   scratchEventStack.clear();
   setCoil(0);
   readyForCrossing = true;
   eventCompleted = true;
-
+  pingResetCounter();
 
 }
 
